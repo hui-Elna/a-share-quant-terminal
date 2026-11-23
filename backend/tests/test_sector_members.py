@@ -18,6 +18,7 @@ import pandas as pd
 
 from app.ingest import akshare_provider, service
 from app.ingest.base import FetchResult
+from app.ingest.sector_pool import SectorPool
 
 
 class _FakeJob:
@@ -115,6 +116,28 @@ def _patch_service(
             for index in range(sector_count)
         }
 
+    def pool_codes() -> tuple[str, ...]:
+        if sector_info is not None:
+            return tuple(sector_info.keys())
+        return tuple(f"S{index:02d}" for index in range(sector_count))
+
+    async def fake_pool(db, day):
+        codes = pool_codes()
+        return SectorPool(
+            trade_date=day,
+            industry_codes=codes,
+            theme_codes=(),
+            actionable_codes=codes,
+            excluded={},
+            version="test",
+        )
+
+    def fake_boards():
+        return [
+            {"sector_code": code, "sector_name": f"板块{code}", "sector_type": "concept"}
+            for code in pool_codes()
+        ]
+
     async def fake_open(db):
         return open_members or {}
 
@@ -133,6 +156,8 @@ def _patch_service(
     monkeypatch.setattr(service, "_db_scope", fake_scope)
     monkeypatch.setattr(service, "_is_trade_day", fake_trade_day)
     monkeypatch.setattr(service, "_load_sector_info", fake_sector_info)
+    monkeypatch.setattr(service, "resolve_sector_pool", fake_pool)
+    monkeypatch.setattr(service, "load_board_list", fake_boards)
     monkeypatch.setattr(service, "_load_open_members", fake_open)
     monkeypatch.setattr(service, "_load_partial_members", fake_partial)
     monkeypatch.setattr(service, "get_provider_chain", lambda: chain)

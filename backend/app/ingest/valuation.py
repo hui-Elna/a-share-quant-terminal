@@ -1184,6 +1184,13 @@ async def compute_valuation(
             },
         )
 
+    if start_date == end_date:
+        from app.ingest.valuation_daily import compute_valuation_single_day_fast
+
+        return await compute_valuation_single_day_fast(
+            code_list, start_date, db, started, dataset=DATASET
+        )
+
     written = 0
     failed: dict[str, str] = {}
     no_financials: list[str] = []
@@ -1382,23 +1389,92 @@ async def backfill_valuation(
         quality_status=compute_result.quality_status,
     )
 
-async def collect_latest_valuation(
-    trade_date: date, db: "AsyncSession | None" = None
+async def _valuation_is_fresh(
+    db: "AsyncSession | None",
+    target: date,
+) -> tuple[bool, int]:
+    """估值是否已新鲜：价格、财报、分红三表在估值成功后都没有再更新。"""
+    from sqlalchemy import text
+
+    async with _db_scope(db) as session:
+        row = (await session.execute(
+            text(
+                "SELECT last_trade_date, last_success_at, status, rows "
+                "FROM meta_data_quality WHERE dataset = :dataset"
+            ),
+            {"dataset": DATASET},
+        )).first()
+        if row is None:
+            return False, 0
+        last_trade_date, last_success_at, status, existing = row
+        if str(status) != QualityStatus.OK.value or last_trade_date != target:
+            return False, int(existing or 0)
+        if last_success_at is None:
+            return False, int(existing or 0)
+
+        stamps: list[datetime] = []
+        for table in ("fact_stock_daily", "dim_stock_financial", "dim_stock_dividend"):
+            where = " WHERE trade_date = :target" if table == "fact_stock_daily" else ""
+            stamp = (await session.execute(
+                text(f"SELECT max(updated_at) FROM {table}{where}"),
+                {"target": target},
+            )).scalar()
+            if stamp is not None:
+                stamps.append(stamp)
+        if not stamps:
+            return True, int(existing or 0)
+        latest = max(
+            stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=timezone.utc)
+            for stamp in stamps
+        )
+        success = (
+            last_success_at
+            if last_success_at.tzinfo is not None
+            else last_success_at.replace(tzinfo=timezone.utc)
+        )
+        return success >= latest, int(existing or 0)
+
+
+async def _collect_latest_valuation_impl(
+    trade_date: date,
+    db: "AsyncSession | None" = None,
+    *,
+    force: bool = False,
 ) -> FetchResult:
     """每日增量：只更新 ``trade_date`` 这一天 = 阶段 1a + 1b（``only_missing``）+ 阶段 2（单日）。
 
     正常情况下阶段 1a/1b 几乎零请求（财报已是最新可得报告期、分红 30 天窗口内不重抓），
-    所以每日成本主要是阶段 2 的纯数据库计算，秒级完成。
+    所以每日成本主要是阶段 2 的纯数据库计算。
+
+    ``force=False`` 且三表输入未变时直接返回 ``skipped=already_collected``，
+    防止 catch-up/重启把同一天的估值重复计算。
 
     Args:
         trade_date: 目标交易日。
         db: 外部会话（``pipeline`` 传入，只 flush 不 commit）。
+        force: 忽略新鲜度判断，强制重算。
 
     Returns:
         ``FetchResult``：``rows`` = 更新的日线行数，``total`` = 当日有行情的股票数。
     """
     started = time.perf_counter()
     target = _as_date(trade_date)
+    if not force and config.VALUATION_SKIP_IF_FRESH:
+        fresh, existing = await _valuation_is_fresh(db, target)
+        if fresh:
+            logger.info("估值已新鲜，跳过 date=%s existing=%s", target, existing)
+            return FetchResult(
+                rows=0,
+                total=0,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                quality_status=QualityStatus.OK.value,
+                detail={
+                    "task": "collect_latest_valuation",
+                    "skipped": "already_collected",
+                    "existing": existing,
+                    "trade_date": target.isoformat(),
+                },
+            )
     sync_result = await sync_financials(
         codes=None, start_year=DEFAULT_START_YEAR, db=db, only_missing=True, resume=True
     )
@@ -1408,6 +1484,11 @@ async def collect_latest_valuation(
     revenue_result = await sync_revenue_bulk(db=db)
     compute_result = await compute_valuation(target, target, None, db=db)
     elapsed = int((time.perf_counter() - started) * 1000)
+    if elapsed / 1000 > config.VALUATION_TARGET_SEC:
+        logger.warning(
+            "估值计算耗时 %.1fs 超过目标 %.0fs date=%s",
+            elapsed / 1000, config.VALUATION_TARGET_SEC, target,
+        )
     total = (
         compute_result.total
         if (compute_result.total or 0) > 0
@@ -1431,6 +1512,48 @@ async def collect_latest_valuation(
         },
         quality_status=compute_result.quality_status,
     )
+
+
+async def collect_latest_valuation(
+    trade_date: date,
+    db: "AsyncSession | None" = None,
+    *,
+    force: bool = False,
+) -> FetchResult:
+    """每日估值入口：执行增量并在 ``ingest_job`` 记录整体状态与耗时。"""
+    started = time.perf_counter()
+    target = _as_date(trade_date)
+    job_id = await _job_begin(
+        db,
+        "valuation",
+        DATASET,
+        {"trade_date": target.isoformat(), "force": force},
+        None,
+    )
+    try:
+        result = await _collect_latest_valuation_impl(trade_date, db, force=force)
+        skipped = (result.detail or {}).get("skipped")
+        status = (
+            "skipped" if skipped == "already_collected"
+            else ("success" if result.quality_status == QualityStatus.OK.value else "partial")
+        )
+        done = result.total or int((result.detail or {}).get("existing") or 0)
+        await _job_finish(
+            db, job_id, status,
+            started_at=started,
+            done=done,
+            failed=result.failed,
+            rows_written=result.rows,
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001 —— 先记失败 job，再交给上层
+        await _job_finish(
+            db, job_id, "failed",
+            started_at=started,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        raise
+
 
 __all__ = [
     "REPORT_LAG_DAYS_BY_MONTH",

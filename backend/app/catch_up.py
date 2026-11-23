@@ -347,11 +347,11 @@ async def _execute_catch_up(
         if day == today and snapshot_ok:
             summary = await run_daily_pipeline(day, db, steps=(
                 "calendar", "universe", "index", "broad_indices", "style_indices",
-                "sector", "sector_members", "snapshot", "moneyflow", "sector_agg",
-                "margin", "valuation", "features", "scores", "sector_scores",
+                "sector_snapshot", "sector", "sector_members", "snapshot", "moneyflow",
+                "sector_agg", "margin", "valuation", "features", "scores", "sector_scores",
                 "macro_rates", "market_factors", "temperature", "regime", "report",
                 "algos",
-            ))
+            ), skip_if_fresh=config.CATCH_UP_SKIP_FRESH)
             failed = [
                 key for key, value in summary["steps"].items()
                 if isinstance(value, dict) and value.get("status") == TaskStatus.FAILED

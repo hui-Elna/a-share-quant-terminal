@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.db.models import DimSectorMember, FactSectorDaily, TradeCalendar
 from app.ingest import service
 from app.ingest.base import FetchResult
+from app.ingest.sector_pool import SectorPool
 
 pytestmark = pytest.mark.asyncio
 
@@ -78,8 +79,26 @@ async def _seed(db, members: list[tuple[str, bool]]) -> None:
 
 
 def _patch_provider(monkeypatch, codes: list[str]) -> None:
+    async def fake_pool(db, trade_date):
+        return SectorPool(
+            trade_date=trade_date,
+            industry_codes=(SECTOR,),
+            theme_codes=(),
+            actionable_codes=(SECTOR,),
+            excluded={},
+            version="test",
+        )
+
+    def fake_boards():
+        return [{
+            "sector_code": SECTOR, "sector_name": "测试板块",
+            "sector_type": "concept",
+        }]
+
     monkeypatch.setattr(service, "_advisory_lock", _fake_lock)
     monkeypatch.setattr(service, "_JobTracker", _FakeJob)
+    monkeypatch.setattr(service, "resolve_sector_pool", fake_pool)
+    monkeypatch.setattr(service, "load_board_list", fake_boards)
     monkeypatch.setattr(service, "get_provider_chain", lambda: _FakeChain(codes))
 
 

@@ -89,6 +89,25 @@ SNAPSHOT_FETCH_TIMEOUT_SEC = _env_float("SNAPSHOT_FETCH_TIMEOUT_SEC", 180.0)
 # 单板块历史拉取的墙钟上限：akshare 内部 requests 没有 timeout，
 # 一次挂死会让整条板块日更（乃至当日流水线）永久阻塞
 SECTOR_BOARD_TIMEOUT_SEC = _env_float("SECTOR_BOARD_TIMEOUT_SEC", 60.0)
+
+# ==================== 板块池 / 采集瘦身（V10） ====================
+# industry=只采同花顺行业；industry_plus_theme=行业 + 主题白名单
+SECTOR_UNIVERSE_MODE = _env("SECTOR_UNIVERSE_MODE", "industry_plus_theme").strip().lower()
+SECTOR_THEME_WHITELIST = tuple(
+    item.strip() for item in _env("SECTOR_THEME_WHITELIST", "").split(",") if item.strip()
+)
+SECTOR_MIN_MEMBERS = _env_int("SECTOR_MIN_MEMBERS", 5)
+SECTOR_HISTORY_DAILY = _env_bool("SECTOR_HISTORY_DAILY", True)
+SECTOR_HISTORY_SOFT_DEADLINE_SEC = _env_float("SECTOR_HISTORY_SOFT_DEADLINE_SEC", 90.0)
+SECTOR_SNAPSHOT_ENABLED = _env_bool("SECTOR_SNAPSHOT_ENABLED", True)
+SECTOR_SNAPSHOT_TIMEOUT_SEC = _env_float("SECTOR_SNAPSHOT_TIMEOUT_SEC", 120.0)
+SECTOR_MEMBERS_WEEKLY = _env_bool("SECTOR_MEMBERS_WEEKLY", True)
+MONEYFLOW_FULL_WEEKLY = _env_bool("MONEYFLOW_FULL_WEEKLY", True)
+VALUATION_SKIP_IF_FRESH = _env_bool("VALUATION_SKIP_IF_FRESH", True)
+CATCH_UP_SKIP_FRESH = _env_bool("CATCH_UP_SKIP_FRESH", True)
+VALUATION_TARGET_SEC = _env_float("VALUATION_TARGET_SEC", 30.0)
+ETF_MIN_AMOUNT = _env_float("ETF_MIN_AMOUNT", 1.0e8)
+ETF_MIN_AUM = _env_float("ETF_MIN_AUM", 1.0e9)
 # 历史回补 ≤ 2 请求/秒
 HISTORY_REQUESTS_PER_SEC = _env_float("HISTORY_REQUESTS_PER_SEC", 2.0)
 # 单次 HTTP/接口调用超时与重试

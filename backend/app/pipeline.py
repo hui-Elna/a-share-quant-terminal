@@ -19,6 +19,7 @@ from typing import Any, Iterable
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import config
 from app.core.logging import bind_run, get_logger
 from app.core.status import QualityStatus, TaskStatus
 from app.services.freshness import write_freshness
@@ -26,10 +27,13 @@ from app.services.freshness import write_freshness
 logger = get_logger(__name__)
 
 DEFAULT_DAILY_STEPS = (
-    "calendar", "universe", "index", "broad_indices", "style_indices", "sector",
-    "sector_members", "snapshot", "moneyflow", "sector_agg", "margin", "valuation",
-    "features", "scores", "sector_scores", "macro_rates", "market_factors",
-    "temperature", "regime", "report", "algos", "signal_perf",
+    "calendar", "universe", "index", "broad_indices", "style_indices",
+    "sector_snapshot", "sector",
+    # 回滚开关：SECTOR_MEMBERS_WEEKLY=0 时恢复旧行为，把成分放回每日链路。
+    *(() if config.SECTOR_MEMBERS_WEEKLY else ("sector_members",)),
+    "snapshot", "moneyflow", "sector_agg", "margin",
+    "valuation", "features", "scores", "sector_scores", "macro_rates",
+    "market_factors", "temperature", "regime", "report", "algos", "signal_perf",
 )
 
 # 支持 codes 定向执行的 task：这些任务的 rows 只是局部代码，不能代表数据集全量状态。
@@ -55,6 +59,7 @@ TASK_DATASET = {
     "broad_indices": "broad_indices",
     "style_indices": "style_indices",
     "sector": "sector_daily",
+    "sector_snapshot": "sector_snapshot",
     "sector_members": "sector_members",
     "sector_fallback": "sector_daily",
     "moneyflow": "moneyflow",
@@ -192,6 +197,7 @@ async def run_task(
     start: date | None = None,
     end: date | None = None,
     codes: str | None = None,
+    force: bool = False,
     db: AsyncSession | None = None,
 ) -> dict:
     """执行单个任务并返回统计。这是 admin API 与 worker 的统一入口。"""
@@ -199,7 +205,7 @@ async def run_task(
         from app.db.session import AsyncSessionLocal
         async with AsyncSessionLocal() as own_db:
             return await run_task(task, trade_date=trade_date, start=start, end=end,
-                                  codes=codes, db=own_db)
+                                  codes=codes, force=force, db=own_db)
 
     started = time.perf_counter()
     dataset = TASK_DATASET.get(task, task)
@@ -210,7 +216,7 @@ async def run_task(
         logger.info("任务开始")
         try:
             payload = await _dispatch(task, trade_date=trade_date, start=start,
-                                      end=end, codes=codes, db=db)
+                                      end=end, codes=codes, force=force, db=db)
         except Exception as exc:                      # noqa: BLE001 —— 兜底并记录，不吞掉
             logger.exception("任务失败")
             await _reset_session(db)
@@ -317,6 +323,7 @@ async def _dispatch(
     start: date | None,
     end: date | None,
     codes: str | None,
+    force: bool,
     db: AsyncSession,
 ) -> Any:
     """按任务名分发到具体实现。延迟 import：避免 API 启动时拉起 pandas/akshare。"""
@@ -382,6 +389,10 @@ async def _dispatch(
         return {"rows": 0, "skipped": True,
                 "reason": "非交易日或无可用交易日（必须先同步交易日历）"}
 
+    if task == "sector_snapshot":
+        from app.ingest.sector_snapshot import collect_sector_snapshot
+        return await collect_sector_snapshot(resolved, db)
+
     if task == "snapshot":
         from app.ingest.service import collect_daily_snapshot
         return await collect_daily_snapshot(resolved, db)
@@ -402,7 +413,7 @@ async def _dispatch(
         # 板块日线统一同花顺口径（与 dim_sector_member 成分名单一致）；
         # 当日历史 K 线缺失时由采集函数内部用实时快照补齐，不再写入东财 BK 行。
         from app.ingest.service import collect_sector_daily
-        return await collect_sector_daily(resolved, db)
+        return await collect_sector_daily(resolved, db, codes=code_list)
 
     if task == "sector_members":
         from app.ingest.service import collect_sector_members
@@ -418,13 +429,20 @@ async def _dispatch(
         from app.ingest.valuation import backfill_valuation, collect_latest_valuation
         if start is not None:
             return await backfill_valuation(code_list, start, end or resolved)
-        return await collect_latest_valuation(resolved, db=db)
+        return await collect_latest_valuation(resolved, db=db, force=force)
 
     if task == "moneyflow":
         if start is not None:
             # 指定区间即重建历史资金流（东财排行只有当日快照）
             from app.ingest.bulk_backfill import backfill_moneyflow
             return await backfill_moneyflow(start=start, end=end, codes=code_list, db=db)
+        if config.MONEYFLOW_FULL_WEEKLY and not force:
+            return {
+                "rows": 0,
+                "skipped": True,
+                "reason": "weekly_only",
+                "detail": {"task": "moneyflow", "weekly": True},
+            }
         from app.ingest.service import collect_moneyflow
         return await collect_moneyflow(resolved, db)
 
@@ -516,25 +534,58 @@ async def _dispatch(
 # 每日全链路
 # ============================================================
 
+#: 补跑时允许“已新鲜则跳过”的高成本任务；行情快照等便宜任务不在此列。
+_FRESH_SKIP_TASKS = {"valuation", "sector", "sector_members", "moneyflow"}
+
+
+async def _dataset_fresh(db: AsyncSession, dataset: str, trade_date: date) -> bool:
+    """按 meta_data_quality 判断数据集在目标日是否已成功。"""
+    row = (await db.execute(
+        text("SELECT status, last_trade_date FROM meta_data_quality WHERE dataset = :dataset"),
+        {"dataset": dataset},
+    )).first()
+    if row is None:
+        return False
+    status, last_trade_date = row
+    return str(status) == QualityStatus.OK.value and last_trade_date == trade_date
+
+
 async def run_daily_pipeline(
     trade_date: date,
     db: AsyncSession | None = None,
     steps: Iterable[str] = DEFAULT_DAILY_STEPS,
+    *,
+    skip_if_fresh: bool = False,
 ) -> dict:
-    """执行完整每日流水线。每步失败不影响后续（但会记入结果）。"""
+    """执行完整每日流水线。每步失败不影响后续（但会记入结果）。
+
+    ``skip_if_fresh=True`` 时，只对 ``_FRESH_SKIP_TASKS`` 中已成功的数据集跳过，
+    用于 catch-up：某个数据集失败不应导致其它已新鲜的数据集整条重跑。
+    """
     if db is None:
         from app.db.session import AsyncSessionLocal
         async with AsyncSessionLocal() as own_db:
-            return await run_daily_pipeline(trade_date, own_db, steps)
+            return await run_daily_pipeline(
+                trade_date, own_db, steps, skip_if_fresh=skip_if_fresh
+            )
 
     summary: dict[str, Any] = {}
     with bind_run(trade_date=trade_date.isoformat()):
-        logger.info("每日流水线开始 steps=%s", list(steps))
+        logger.info("每日流水线开始 steps=%s skip_if_fresh=%s", list(steps), skip_if_fresh)
         for step in steps:
             if step == "algos":
                 # 选股必须在评分与日报之后
                 pass
             try:
+                if skip_if_fresh and step in _FRESH_SKIP_TASKS:
+                    dataset = TASK_DATASET.get(step, step)
+                    if await _dataset_fresh(db, dataset, trade_date):
+                        logger.info("步骤 %s 在 %s 已新鲜，跳过", step, trade_date)
+                        summary[step] = {
+                            "status": TaskStatus.SKIPPED.value,
+                            "reason": "fresh",
+                        }
+                        continue
                 summary[step] = await run_task(step, trade_date=trade_date, db=db)
             except Exception as exc:                  # noqa: BLE001
                 logger.exception("步骤 %s 失败", step)
@@ -551,13 +602,14 @@ async def run_task_background(
     start: date | None = None,
     end: date | None = None,
     codes: str | None = None,
+    force: bool = False,
 ) -> None:
     """后台任务入口：自建会话，异常只记日志（BackgroundTasks 无人接收返回值）。"""
     from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
         try:
             await run_task(task, trade_date=trade_date, start=start, end=end,
-                           codes=codes, db=db)
+                           codes=codes, force=force, db=db)
         except Exception:                             # noqa: BLE001
             logger.exception("后台任务 %s 失败", task)
 

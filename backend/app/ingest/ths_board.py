@@ -132,29 +132,44 @@ def load_board_list(*, refresh: bool = False) -> list[dict[str, str]]:
 async def fetch_daily_rows(
     trade_date: date,
     *,
+    boards: list[dict[str, str]] | None = None,
     concurrency: int = 6,
     attempts: int = 2,
     timeout_sec: float = config.SECTOR_BOARD_TIMEOUT_SEC,
+    deadline_sec: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """拉取指定交易日全部板块日线（同花顺历史接口，含 OHLCV/成交额）。
+    """拉取指定交易日板块日线（同花顺历史接口，含 OHLCV/成交额）。
 
+    - ``boards`` 为空时读取全量板块清单；传入时只抓指定板块（目标池）；
     - 窗口从 ``trade_date - 10 天`` 开始：``pct_chg`` 需要前一交易日收盘推导；
     - 每个板块请求前过 ``HISTORY_LIMITER``（≤2 req/s），并发只用于掩盖单次延迟；
     - 单板块失败/无数据不阻塞整体，失败明细进 detail 供质量报告使用；
     - 单板块墙钟上限 ``timeout_sec``：akshare 内部无 timeout，挂死必须被切断，
-      否则整条日更链路连同 advisory lock 会一直卡住。
+      否则整条日更链路连同 advisory lock 会一直卡住；
+    - ``deadline_sec`` 是整任务软截止：到点后不再调度新板块，返回 ``soft_deadline``。
 
     Returns:
         ``(rows, detail)``；rows 已按 sector_code 去重排序，detail 含
         ``source/boards/failed/empty/errors``。
     """
-    boards = await asyncio.to_thread(load_board_list)
+    board_list = (
+        list(boards) if boards is not None
+        else await asyncio.to_thread(load_board_list)
+    )
     start = trade_date - timedelta(days=10)
     semaphore = asyncio.Semaphore(max(1, concurrency))
+    deadline = time.perf_counter() + deadline_sec if deadline_sec else None
+
+    def _expired() -> bool:
+        return deadline is not None and time.perf_counter() >= deadline
 
     async def _one(board: dict[str, str]) -> tuple[str, list[dict[str, Any]], str | None]:
         last_exc: Exception | None = None
+        if _expired():
+            return board["sector_code"], [], "soft_deadline"
         async with semaphore:
+            if _expired():
+                return board["sector_code"], [], "soft_deadline"
             for attempt in range(max(1, attempts)):
                 await HISTORY_LIMITER.acquire()
                 try:
@@ -175,7 +190,7 @@ async def fetch_daily_rows(
         assert last_exc is not None
         return board["sector_code"], [], f"{type(last_exc).__name__}: {last_exc}"[:200]
 
-    results = await asyncio.gather(*(_one(board) for board in boards))
+    results = await asyncio.gather(*(_one(board) for board in board_list))
     errors: dict[str, str] = {}
     empty = 0
     rows: list[dict[str, Any]] = []
@@ -190,14 +205,16 @@ async def fetch_daily_rows(
     unique = {row["sector_code"]: row for row in rows}
     detail = {
         "source": THS_SRC,
-        "boards": len(boards),
+        "boards": len(board_list),
         "failed": len(errors),
         "empty": empty,
+        "deadline_sec": deadline_sec,
         "errors": dict(sorted(errors.items())[:10]),
     }
     logger.info(
-        "同花顺板块日线 %s：%d/%d 板块有数据（失败 %d，空 %d）",
-        trade_date, len(unique), len(boards), len(errors), empty,
+        "同花顺板块日线 %s：%d/%d 板块有数据（失败 %d，空 %d，软截止 %s）",
+        trade_date, len(unique), len(board_list), len(errors), empty,
+        "是" if any(value == "soft_deadline" for value in errors.values()) else "否",
     )
     return sorted(unique.values(), key=lambda item: item["sector_code"]), detail
 

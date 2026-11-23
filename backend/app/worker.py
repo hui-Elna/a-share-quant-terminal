@@ -20,7 +20,12 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from app.core.config import CRAWL_INTERVAL_MINUTES, TIMEZONE
+from app.core.config import (
+    CRAWL_INTERVAL_MINUTES,
+    MONEYFLOW_FULL_WEEKLY,
+    SECTOR_MEMBERS_WEEKLY,
+    TIMEZONE,
+)
 from app.core.logging import bind_run, get_logger
 
 logger = get_logger("worker")
@@ -143,6 +148,30 @@ async def run_paper_job(db) -> None:
     results = await sync_all_paper_portfolios(db)
     failed = [item["algo"] for item in results if item.get("status") == "failed"]
     logger.info("纸面组合结束 total=%d failed=%s", len(results), failed)
+
+
+async def run_sector_members_job(db) -> None:
+    """每周全量板块成分（目标池；SCD2）。"""
+    from app.ingest.calendar import latest_trade_date
+    from app.pipeline import run_task
+
+    latest = await latest_trade_date(db, on_or_before=date.today())
+    if latest is None:
+        logger.info("无可用交易日，跳过板块成分周更")
+        return
+    await run_task("sector_members", trade_date=latest, db=db)
+
+
+async def run_moneyflow_job(db) -> None:
+    """每周全市场个股资金流（每日只保留板块级资金流）。"""
+    from app.ingest.calendar import latest_trade_date
+    from app.pipeline import run_task
+
+    latest = await latest_trade_date(db, on_or_before=date.today())
+    if latest is None:
+        logger.info("无可用交易日，跳过资金流周更")
+        return
+    await run_task("moneyflow", trade_date=latest, force=True, db=db)
 
 
 async def run_news_crawl_job(db) -> None:
@@ -285,6 +314,16 @@ def start_scheduler() -> AsyncIOScheduler:
                       args=["compass_paper", run_compass_paper_backfill_job],
                       id="compass_paper", name="罗盘复盘回填", replace_existing=True,
                       misfire_grace_time=_DAY_GRACE_SEC)
+    if SECTOR_MEMBERS_WEEKLY:
+        scheduler.add_job(_with_lock, CronTrigger(day_of_week="sun", hour=11, minute=30, timezone=_TZ),
+                          args=["sector_members_weekly", run_sector_members_job],
+                          id="sector_members_weekly", name="板块成分周更",
+                          replace_existing=True, misfire_grace_time=_NIGHT_GRACE_SEC)
+    if MONEYFLOW_FULL_WEEKLY:
+        scheduler.add_job(_with_lock, CronTrigger(day_of_week="sun", hour=12, minute=0, timezone=_TZ),
+                          args=["moneyflow_weekly", run_moneyflow_job],
+                          id="moneyflow_weekly", name="个股资金流周更",
+                          replace_existing=True, misfire_grace_time=_NIGHT_GRACE_SEC)
     scheduler.add_job(_with_lock, CronTrigger(hour=2, minute=0, timezone=_TZ),
                       args=["backfill", run_backfill_job],
                       id="backfill", name="历史补齐", replace_existing=True,
@@ -296,7 +335,8 @@ def start_scheduler() -> AsyncIOScheduler:
     scheduler.start()
     logger.info("定时任务已启动：15:36 盘后 / 16:10 ETF 同步 / 16:20 仓位罗盘"
                 " / 16:30 选股 / 17:00 罗盘推送 / 17:10 信号统计 / 17:30 纸面"
-                " / 17:40 罗盘复盘回填 / 02:00 补齐 / 每 %d 分钟新闻", CRAWL_INTERVAL_MINUTES)
+                " / 17:40 罗盘复盘回填 / 周日 11:30 板块成分 / 周日 12:00 资金流"
+                " / 02:00 补齐 / 每 %d 分钟新闻", CRAWL_INTERVAL_MINUTES)
     return scheduler
 
 
@@ -324,5 +364,6 @@ def job_status() -> list[dict]:
 __all__ = ["start_scheduler", "stop_scheduler", "job_status",
            "run_daily_pipeline_job", "run_algo_job", "run_signal_perf_job",
            "run_paper_job", "run_news_crawl_job", "run_backfill_job",
+           "run_sector_members_job", "run_moneyflow_job",
            "run_compass_card_job", "run_compass_push_job",
            "run_compass_paper_backfill_job", "run_etf_sync_job"]

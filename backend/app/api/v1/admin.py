@@ -22,8 +22,8 @@ logger = get_logger(__name__)
 
 INGEST_TASKS = {
     "calendar", "universe", "snapshot", "backfill", "history_fast",
-    "moneyflow_history", "valuation_fast", "rebuild", "sector", "sector_members",
-    "sector_fallback", "moneyflow", "valuation", "index", "broad_indices",
+    "moneyflow_history", "valuation_fast", "rebuild", "sector", "sector_snapshot",
+    "sector_members", "sector_fallback", "moneyflow", "valuation", "index", "broad_indices",
     "style_indices", "margin", "features", "scores", "sector_scores", "report",
     "algos", "signal_perf", "all",
 }
@@ -42,6 +42,7 @@ async def trigger_ingest(
     start: Optional[date] = Query(None, description="backfill 起始日期"),
     end: Optional[date] = Query(None, description="backfill 结束日期"),
     codes: Optional[str] = Query(None, description="backfill 指定代码，逗号分隔"),
+    force: bool = Query(False, description="忽略新鲜度/周频限制，强制执行"),
     background: bool = Query(False, description="是否后台执行（重任务建议 true）"),
     _admin: AdminDep = None,
     db: AsyncSession = Depends(get_db),
@@ -53,7 +54,9 @@ async def trigger_ingest(
 
     if background or task in HEAVY_TASKS:
         from app.pipeline import run_task_background
-        background_tasks.add_task(run_task_background, task, trade_date, start, end, codes)
+        background_tasks.add_task(
+            run_task_background, task, trade_date, start, end, codes, force
+        )
         return {
             "status": "accepted", "task": task, "mode": "background",
             "hint": "进度见 GET /api/v1/meta/jobs",
@@ -61,7 +64,7 @@ async def trigger_ingest(
 
     from app.pipeline import run_task
     return await run_task(task, trade_date=trade_date, start=start, end=end,
-                          codes=codes, db=db)
+                          codes=codes, force=force, db=db)
 
 
 @router.post("/catch-up")

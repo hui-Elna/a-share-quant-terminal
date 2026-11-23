@@ -108,9 +108,10 @@ pipeline.run_task(task)
 | `universe` | `sync_stock_universe` | L1041 | 全市场标的（含退市/ST/行业/股本/所有制） |
 | `snapshot` | `collect_daily_snapshot` | L1202 | 当日全市场快照，质量校验后 upsert |
 | `backfill` | `backfill_stock_history` | L1328 | Provider 链历史回补，断点续传 |
-| `sector` | `collect_sector_daily` | L1620 | 板块日线（同花顺口径；缺失用快照补） |
-| `sector_members` | `collect_sector_members` | L1758 | 成分 SCD2，熔断/预算/覆盖率保护 |
-| `moneyflow` | `collect_moneyflow` | L2232 | 东财/同花顺资金流 + 新浪补缺 |
+| `sector_snapshot` | `collect_sector_snapshot` | `sector_snapshot.py` | 板块即时快照（仅当日、只写目标池、不覆盖 OHLCV） |
+| `sector` | `collect_sector_daily` | L1620 | 板块日线（目标池；缺失用快照补） |
+| `sector_members` | `collect_sector_members` | L1758 | 目标池成分 SCD2；每周；熔断/预算/覆盖率保护 |
+| `moneyflow` | `collect_moneyflow` | L2232 | 全市场个股资金流；每周；东财/同花顺 + 新浪补缺 |
 | `margin` | `collect_margin` | L2406 | 两融余额 + 融资买入额 + 北向 |
 | `macro_rates` | `collect_macro_rates` | L2522 | 中债 1Y/10Y |
 | `style_indices` | `collect_style_indices` | L2634 | 创业板50 + 红利低波50 |
@@ -299,3 +300,15 @@ README 记录的实测结论（2026-11）：
 4. 在 `quality.py` 增加对应校验（如新数据集）；
 5. 在 `pipeline.TASK_DATASET` 登记 dataset，保证新鲜度可观测；
 6. 补 `tests/test_ingest.py` 或专项测试（离线 fixture，不联网）。
+
+---
+
+## 12. V10 数据采集瘦身（2026-11）
+
+- **目标池**：`ingest/sector_pool.py` 解析同花顺行业 + 主题白名单，按 ETF 映射、20 日均额、规模、成分数过滤；`actionable_codes` 是每日采集的唯一范围。
+- **`sector_snapshot`**：同花顺即时资金流两次调用，写入 `fact_sector_daily` 快照字段；专用 upsert，不覆盖 OHLCV；仅当日执行。
+- **`sector`**：`collect_sector_daily` 只抓目标池，支持 `codes` 定向回补与 90s 软截止。
+- **频率**：`sector_members` 改为每周；全市场 `moneyflow` 改为每周；每日资金流由板块快照提供。
+- **估值**：`collect_latest_valuation` 在同日价格/财报/分红未变时返回 `skipped=already_collected`；`force=True` 可强制重算。
+- **估值单日快速路径**：批量取数 + 向量化计算 + 一次批量 UPDATE；实测 5216 只约 2.76s，与慢路径逐字段零差异。
+- 配置见 `core/config.py` 的 V10 段；验收见 `docs/GFNA_V10_数据采集瘦身任务书.md`。

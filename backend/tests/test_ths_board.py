@@ -141,7 +141,8 @@ def test_fetch_daily_rows_filters_date_and_derives_pct(monkeypatch) -> None:
     assert rows[0]["src"] == "ths_hist"
 
     assert detail == {
-        "source": "ths_hist", "boards": 3, "failed": 0, "empty": 0, "errors": {},
+        "source": "ths_hist", "boards": 3, "failed": 0, "empty": 0,
+        "deadline_sec": None, "errors": {},
     }
     assert limiter.calls == 3
 

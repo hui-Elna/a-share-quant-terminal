@@ -165,15 +165,18 @@ python scripts/pipeline_cli.py rebuild --start 2025-07-01 --end 2026-10-23
 python scripts/pipeline_cli.py features
 python scripts/pipeline_cli.py scores
 python scripts/pipeline_cli.py sector_scores
+python scripts/pipeline_cli.py sector_snapshot
 python scripts/pipeline_cli.py algos
 python scripts/pipeline_cli.py report
 python scripts/pipeline_cli.py daily      # 等价 all
 python scripts/pipeline_cli.py all
+python scripts/pipeline_cli.py valuation --force   # 忽略新鲜度，强制重算
+python scripts/pipeline_cli.py moneyflow --force   # 忽略周频限制，立即补采
 python scripts/pipeline_cli.py demo       # 离线演示数据
 python scripts/pipeline_cli.py backtest a3 --start 2025-10-21 --end 2026-10-21
 ```
 
-支持任务名：`backfill / history_fast / moneyflow_history / valuation_fast / rebuild / snapshot / daily / all / features / scores / sector_scores / algos / report / calendar / universe / index / sector / sector_members / sector_fallback / moneyflow / valuation / margin / demo`。
+支持任务名：`backfill / history_fast / moneyflow_history / valuation_fast / rebuild / snapshot / daily / all / features / scores / sector_scores / sector_snapshot / algos / report / calendar / universe / index / sector / sector_members / sector_fallback / moneyflow / valuation / margin / demo`。
 
 ---
 
@@ -217,8 +220,12 @@ python scripts/pipeline_cli.py backtest a3 --start 2025-10-21 --end 2026-10-21
 | 16:30 | 策略选股 + 观察候选 + 推送 | 先 `algos`，再 `OBSERVATION_ALGOS`，最后推送 |
 | 17:10 | 信号前瞻统计 | 重算最近 25 个交易日 |
 | 17:30 | 纸面组合 | 非交易日跳过；单组合失败隔离 |
+| 周日 11:30 | 板块成分周更 | `sector_members`，只处理目标池 |
+| 周日 12:00 | 个股资金流周更 | 全市场 `moneyflow`，`force=True` |
 | 02:00 | 历史补齐 | `backfill`，断点续传 |
 | 每 N 分钟 | 新闻采集 | `CRAWL_INTERVAL_MINUTES`，默认 60 |
+
+15:36 盘后流水线中的 `valuation` 会在同日价格/财报/分红未变时跳过（`skipped=already_collected`）；`catch_up` 复用同一保护，避免重复计算。
 
 并发安全：每个任务 `pg_try_advisory_lock("gfna:<name>")`；拿不到锁直接跳过。
 

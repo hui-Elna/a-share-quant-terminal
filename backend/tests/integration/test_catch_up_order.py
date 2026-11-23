@@ -22,7 +22,7 @@ async def test_margin_after_daily_outputs_and_signal_perf_last(monkeypatch) -> N
         calls.append((task, kwargs.get("trade_date")))
         return {"status": "success"}
 
-    async def fake_pipeline(day: date, db, steps=()):
+    async def fake_pipeline(day: date, db, steps=(), **kwargs):
         calls.append(("daily_pipeline", day))
         return {"steps": {}}
 
@@ -61,7 +61,7 @@ async def test_stock_complete_skips_history_fast(monkeypatch) -> None:
         calls.append(task)
         return {"status": "success"}
 
-    async def fake_pipeline(day: date, db, steps=()):
+    async def fake_pipeline(day: date, db, steps=(), **kwargs):
         return {"steps": {}}
 
     monkeypatch.setattr(pipeline, "run_task", fake_run_task)

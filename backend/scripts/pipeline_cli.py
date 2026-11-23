@@ -66,7 +66,8 @@ async def _run_task(args) -> int:
                 result = await seed_demo_data(db)
             else:
                 result = await run_task(task, trade_date=trade_date, start=start,
-                                        end=end, codes=args.codes, db=db)
+                                        end=end, codes=args.codes,
+                                        force=getattr(args, "force", False), db=db)
             await db.commit()
         finally:
             await dispose_engines()
@@ -120,6 +121,7 @@ def main() -> int:
     parser.add_argument("--start", help="起始日期（backfill / backtest）")
     parser.add_argument("--end", help="结束日期（backfill / backtest）")
     parser.add_argument("--codes", help="逗号分隔的股票代码（backfill）")
+    parser.add_argument("--force", action="store_true", help="忽略新鲜度/周频限制，强制执行")
     # 回测参数
     parser.add_argument("--rebalance-days", type=int, dest="rebalance_days")
     parser.add_argument("--max-positions", type=int, dest="max_positions")
@@ -135,8 +137,8 @@ def main() -> int:
     if args.task in {"backfill", "history_fast", "moneyflow_history", "valuation_fast",
                      "rebuild", "snapshot", "daily", "all", "features", "scores",
                      "sector_scores", "algos", "report", "calendar", "universe",
-                     "index", "sector", "sector_members", "sector_fallback",
-                     "moneyflow", "valuation", "margin", "demo"}:
+                     "index", "sector", "sector_snapshot", "sector_members",
+                     "sector_fallback", "moneyflow", "valuation", "margin", "demo"}:
         return asyncio.run(_run_task(args))
 
     parser.error(f"未知任务: {args.task}（回测用 backtest <algo>）")

@@ -139,7 +139,7 @@ def _patch_pipeline(monkeypatch, *, fail_step: str | None = None,
                     "quality_status": "quality_failed", "failed": 1}
         return {"task": task, "status": "success", "rows": 1}
 
-    async def fake_pipeline(day, db=None, steps=None):
+    async def fake_pipeline(day, db=None, steps=None, **kwargs):
         calls.append({"task": "daily_pipeline", "trade_date": day,
                       "steps": list(steps or [])})
         return {"trade_date": day.isoformat(), "steps": {}}

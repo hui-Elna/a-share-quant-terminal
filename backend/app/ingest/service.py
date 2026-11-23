@@ -37,6 +37,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import math
 import time
@@ -87,7 +88,9 @@ from app.db.views import ensure_partition_for
 from app.ingest import calendar as cal
 from app.ingest.akshare_provider import AkshareProvider
 from app.ingest.baostock_provider import BaostockProvider
+from app.ingest.sector_pool import resolve_sector_pool
 from app.ingest.sina_provider import SinaProvider
+from app.ingest.ths_board import load_board_list
 from app.ingest.base import (
     HISTORY_LIMITER,
     SNAPSHOT_LIMITER,
@@ -1639,12 +1642,16 @@ async def _resolve_backfill_codes(
 # A4 板块日线 / 板块成分（SCD2）
 # ============================================================
 async def _fill_sector_rows_from_live(
-    rows: list[dict[str, Any]], trade_date: date
+    rows: list[dict[str, Any]],
+    trade_date: date,
+    allowed_codes: set[str] | None = None,
 ) -> int:
     """用同花顺**实时**板块快照补齐历史接口缺失的板块（仅当日可用）。
 
     实时快照只有指数点位/涨跌幅/领涨股，没有成交量、成交额与 OHLC —— 这些字段
-    由 ``build_sector_daily_rows`` 如实置空，绝不拿其它字段冒充。返回补齐行数。
+    由 ``build_sector_daily_rows`` 如实置空，绝不拿其它字段冒充。
+    ``allowed_codes`` 非空时只补目标池，避免把非目标板块重新写回。
+    返回补齐行数。
     """
     from app.ingest.ths_sector import build_sector_daily_rows, fetch_sector_fundflow
 
@@ -1662,6 +1669,8 @@ async def _fill_sector_rows_from_live(
     extra: dict[str, dict[str, Any]] = {}
     for row in live_rows:
         code = str(row["sector_code"])
+        if allowed_codes is not None and code not in allowed_codes:
+            continue
         if code not in seen:
             extra.setdefault(code, row)
     rows.extend(extra.values())
@@ -1669,13 +1678,18 @@ async def _fill_sector_rows_from_live(
 
 
 async def collect_sector_daily(
-    trade_date: date, db: AsyncSession | None = None
+    trade_date: date,
+    db: AsyncSession | None = None,
+    codes: list[str] | None = None,
 ) -> FetchResult:
-    """A4 板块日线（行业 + 概念），统一同花顺口径（``THS_<名称>``）。
+    """板块日线（目标池），统一同花顺口径（``THS_<名称>``）。
 
-    与 ``dim_sector_member`` 成分名单同一口径，东财 BK 代码无法与 THS 成分聚合，
-    因此不再写入 BK 行。当日历史 K 线尚未发布时，用同花顺实时快照补齐缺失板块
-    （成交量/成交额等该源没有的字段如实置空）。
+    - 默认只抓 ``resolve_sector_pool`` 给出的可交易目标池；
+    - ``codes`` 非空时作为人工定向回补清单，绕过目标池过滤；
+    - 与 ``dim_sector_member`` 成分名单同一口径，东财 BK 代码无法与 THS 成分聚合，
+      因此不再写入 BK 行；
+    - 当日历史 K 线尚未发布时，用同花顺实时快照补齐目标池缺失板块
+      （成交量/成交额等该源没有的字段如实置空）。
     """
     started = time.perf_counter()
     trade_date = _as_date(trade_date)
@@ -1705,50 +1719,79 @@ async def collect_sector_daily(
 
             from app.ingest.ths_board import fetch_daily_rows
 
-            previous_day = await _scalar(
-                db,
-                select(func.max(FactSectorDaily.trade_date))
-                .where(FactSectorDaily.trade_date < trade_date),
-            )
-            previous_rows = 0
-            if previous_day is not None:
-                previous_rows = await _scalar(
-                    db,
-                    select(func.count())
-                    .select_from(FactSectorDaily)
-                    .where(FactSectorDaily.trade_date == previous_day),
+            if not config.SECTOR_HISTORY_DAILY:
+                await job.finish("skipped", error="history_daily_disabled")
+                return _skipped_result(
+                    task, "history_daily_disabled", trade_date=trade_date.isoformat()
                 )
-            expected = max(_db_backed_count(previous_rows), _MIN_SECTOR_ROWS)
 
-            rows, ths_detail = await fetch_daily_rows(trade_date)
+            pool = await resolve_sector_pool(db, trade_date)
+            if codes:
+                target_codes = {
+                    str(code).strip() for code in codes if str(code).strip()
+                }
+            else:
+                target_codes = set(pool.actionable_codes)
+            if not target_codes:
+                await job.finish("skipped", error="empty_pool")
+                return _skipped_result(
+                    task, "empty_pool", trade_date=trade_date.isoformat()
+                )
+
+            board_list = [
+                board for board in await asyncio.to_thread(load_board_list)
+                if str(board.get("sector_code")) in target_codes
+            ]
+            if not board_list:
+                await job.finish("skipped", error="empty_pool")
+                return _skipped_result(
+                    task, "empty_pool", trade_date=trade_date.isoformat()
+                )
+            # 覆盖率分母用目标池，而不是实际拉到的清单：清单缺板块也要暴露为缺口。
+            expected = len(target_codes)
+
+            rows, ths_detail = await fetch_daily_rows(
+                trade_date,
+                boards=board_list,
+                deadline_sec=config.SECTOR_HISTORY_SOFT_DEADLINE_SEC,
+            )
             source = str(ths_detail.get("source") or "ths_hist")
             failed_boards = int(ths_detail.get("failed") or 0)
             live_filled = 0
             if trade_date == today and len(rows) < expected:
-                live_filled = await _fill_sector_rows_from_live(rows, trade_date)
+                live_filled = await _fill_sector_rows_from_live(
+                    rows, trade_date, allowed_codes=target_codes
+                )
                 if live_filled:
                     source = f"{source}+live"
 
+            coverage = round(len(rows) / expected, 4) if expected else 0.0
+            partial = failed_boards > 0
             report = QualityReport(
                 dataset=dataset,
                 rows=len(rows),
                 expected=expected,
-                coverage=round(min(len(rows) / expected, 1.0), 4) if expected else 0.0,
+                coverage=coverage,
             )
             if not rows:
                 report.add("empty_frame", severity="error", message="板块日线为空")
-            elif len(rows) < _MIN_SECTOR_ROWS:
+            elif coverage < config.QUALITY_MIN_COVERAGE:
+                # 单板块失败导致的覆盖缺口不阻断整任务：记 warning + stale，
+                # 由 run_task 标记 partial；只有“没有任何板块失败却大面缺失”才升级 error。
                 report.add(
-                    "row_count_below_threshold",
+                    "coverage_below_threshold",
                     count=len(rows),
-                    severity="error",
-                    message=f"板块日线 {len(rows)} 行 < 阈值 {_MIN_SECTOR_ROWS} 行",
+                    severity="warning" if partial else "error",
+                    message=(
+                        f"板块日线覆盖率 {coverage:.2%} < "
+                        f"{config.QUALITY_MIN_COVERAGE:.0%}"
+                    ),
                 )
-            if len(rows) < expected:
+            elif len(rows) < expected:
                 report.add(
-                    "coverage_below_previous_day", count=len(rows),
+                    "coverage_below_target", count=len(rows),
                     severity="warning",
-                    message=f"板块日线 {len(rows)} 行 < 上一交易日 {expected} 行",
+                    message=f"板块日线 {len(rows)} 行 < 目标池 {expected} 行",
                 )
             duplicated = len(rows) - len({row["sector_code"] for row in rows})
             if duplicated:
@@ -1776,12 +1819,13 @@ async def collect_sector_daily(
                     detail=report.to_detail(),
                 )
 
+            status = QualityStatus.STALE if partial else QualityStatus.OK
             async with _db_scope(db) as session:
                 written = await upsert_rows(
                     session, FactSectorDaily, rows, ["sector_code", "trade_date"]
                 )
                 await record_quality(
-                    session, dataset, report, trade_date, QualityStatus.OK
+                    session, dataset, report, trade_date, status
                 )
 
             elapsed = int((time.perf_counter() - started) * 1000)
@@ -1790,11 +1834,15 @@ async def collect_sector_daily(
                 total=len(rows),
                 failed=failed_boards,
                 elapsed_ms=elapsed,
+                quality_status=status.value,
                 detail={"source": source,
                         "mode": "ths_daily",
                         "boards": ths_detail.get("boards"),
+                        "target_boards": expected,
+                        "coverage": coverage,
                         "empty_boards": ths_detail.get("empty"),
-                        "live_filled": live_filled},
+                        "live_filled": live_filled,
+                        "pool_version": pool.version},
             )
             await job.finish("success" if not failed_boards else "partial",
                              done=written, failed=failed_boards, rows_written=written)
@@ -1835,20 +1883,56 @@ async def collect_sector_members(
                 await job.finish("skipped", error="non_trade_day")
                 return _skipped_result(task, "non_trade_day", trade_date=trade_date.isoformat())
 
+            pool = await resolve_sector_pool(db, trade_date)
+            # 成分任务是 SCD2 的“建档”任务：首次运行/新库时 actionable 可能因
+            # 成分数不足为空，此时退回候选池（行业 + 白名单主题），避免死锁。
+            allowed = set(pool.actionable_codes) or (
+                set(pool.industry_codes) | set(pool.theme_codes)
+            )
+            if not allowed:
+                await job.finish("skipped", error="empty_pool")
+                return _skipped_result(
+                    task, "empty_pool", trade_date=trade_date.isoformat()
+                )
+
             sector_info = await _load_sector_info(db, trade_date)
+            sector_info = {
+                code: info for code, info in sector_info.items() if code in allowed
+            }
+            # 目标池里当日日线缺失的板块也要尝试抓成分：用板块清单补名称/类型。
+            try:
+                board_map = {
+                    str(board.get("sector_code")): board
+                    for board in await asyncio.to_thread(load_board_list)
+                }
+            except Exception as exc:  # noqa: BLE001 —— 清单失败不阻断已有日线板块
+                logger.warning("板块成分：读取板块清单失败（沿用已有板块）：%s", exc)
+                board_map = {}
+            for code in sorted(allowed):
+                if code in sector_info:
+                    continue
+                board = board_map.get(code)
+                if board:
+                    sector_info[code] = {
+                        "sector_name": board.get("sector_name") or code,
+                        "sector_type": board.get("sector_type") or "concept",
+                    }
             if not sector_info:
                 # 当日板块日线还没采：现场拉一次板块列表（不写 fact_sector_daily）
                 chain = _provider_chain("sector", trade_date, db)
                 fetched_list = await chain.fetch_sector_list(trade_date)
                 for record in _records(fetched_list.detail.get("data")):
                     sector_code = record.get("sector_code")
-                    if sector_code:
+                    if sector_code and str(sector_code) in allowed:
                         sector_info[str(sector_code)] = {
                             "sector_name": record.get("sector_name") or str(sector_code),
                             "sector_type": record.get("sector_type") or "concept",
                         }
             if not sector_info:
-                raise ProviderError("板块清单为空，无法采集成分（请先执行 sector 任务）")
+                await job.finish("skipped", error="empty_pool")
+                return _skipped_result(
+                    task, "empty_pool", trade_date=trade_date.isoformat()
+                )
 
             open_members = await _load_open_members(db)
             partial_members = await _load_partial_members(db)
