@@ -304,6 +304,19 @@ async def _stock_days_complete(db: AsyncSession, days: Sequence[date]) -> bool:
     return stock_days_complete(days, counts)
 
 
+def _today_pipeline_steps() -> tuple[str, ...]:
+    """当日补跑步骤；与 DEFAULT_DAILY_STEPS 对齐，成分默认周更不强行每日跑。"""
+    return (
+        "calendar", "universe", "index", "broad_indices", "style_indices",
+        "sector_snapshot", "sector",
+        *(() if config.SECTOR_MEMBERS_WEEKLY else ("sector_members",)),
+        "snapshot", "moneyflow",
+        "sector_agg", "margin", "valuation", "features", "scores", "sector_scores",
+        "macro_rates", "market_factors", "temperature", "regime", "report",
+        "algos",
+    )
+
+
 async def _execute_catch_up(
     days: list[date],
     db: AsyncSession,
@@ -345,13 +358,10 @@ async def _execute_catch_up(
 
     for day in days:
         if day == today and snapshot_ok:
-            summary = await run_daily_pipeline(day, db, steps=(
-                "calendar", "universe", "index", "broad_indices", "style_indices",
-                "sector_snapshot", "sector", "sector_members", "snapshot", "moneyflow",
-                "sector_agg", "margin", "valuation", "features", "scores", "sector_scores",
-                "macro_rates", "market_factors", "temperature", "regime", "report",
-                "algos",
-            ), skip_if_fresh=config.CATCH_UP_SKIP_FRESH)
+            summary = await run_daily_pipeline(
+                day, db, steps=_today_pipeline_steps(),
+                skip_if_fresh=config.CATCH_UP_SKIP_FRESH,
+            )
             failed = [
                 key for key, value in summary["steps"].items()
                 if isinstance(value, dict) and value.get("status") == TaskStatus.FAILED
@@ -455,27 +465,48 @@ async def run_catch_up(db: AsyncSession | None = None) -> dict:
 
 
 async def run_catch_up_in_background(*, delay_sec: float | None = None) -> None:
-    """lifespan 启动任务入口：延迟少许，异常只记日志，绝不影响服务启动。"""
-    await asyncio.sleep(config.CATCH_UP_DELAY_SEC if delay_sec is None else delay_sec)
-    try:
-        summary = await run_catch_up()
-        # 数据补齐后恢复盘后串行链路：进程错过 16:20/17:00 时，罗盘与推送在这里续跑。
-        # 数据未就绪时链路只返回 blocked，不告警，避免服务刚启动就误报。
-        try:
-            from app.daily_chain import run_daily_chain
+    """lifespan 启动任务入口：延迟少许，异常只记日志，绝不影响服务启动。
 
+    启动后先推进**当天**链路（数据缺就采当天 → 罗盘 → 推送），再补历史缺口。
+    这样不需要等到 15:36/16:10 等固定时点，进程一起来就开始跑。
+    """
+    await asyncio.sleep(config.CATCH_UP_DELAY_SEC if delay_sec is None else delay_sec)
+    summary: dict = {}
+    try:
+        from app.daily_chain import run_daily_chain
+
+        # 1) 先跑当天串行链路：数据已新鲜时只补罗盘/推送，缺失时才采集
+        try:
+            startup_chain = await run_daily_chain(run_data=True, reason="startup")
+            summary["daily_chain_startup"] = {
+                key: startup_chain.get(key)
+                for key in ("status", "trade_date", "failed_stage", "error")
+            }
+            logger.info("启动链路：%s", summary["daily_chain_startup"])
+        except Exception:                           # noqa: BLE001
+            logger.exception("启动链路失败（继续补跑历史缺口）")
+
+        # 2) 再补历史缺口；当天已就绪时会自动只做必要步骤
+        try:
+            catch_up_summary = await run_catch_up()
+            summary.update(catch_up_summary)
+        except Exception:                           # noqa: BLE001
+            logger.exception("历史缺口补跑失败（不影响已完成的当日链路）")
+
+        # 3) 历史补跑可能补齐了数据，再恢复一次罗盘/推送（幂等）
+        try:
             chain = await run_daily_chain(run_data=False, reason="catch_up")
             if chain.get("status") not in {"skipped", "blocked"}:
-                summary["daily_chain"] = {
+                summary["daily_chain_resume"] = {
                     key: chain.get(key)
                     for key in ("status", "trade_date", "failed_stage", "error")
                 }
-        except Exception:                               # noqa: BLE001
+        except Exception:                           # noqa: BLE001
             logger.exception("补跑后链路恢复失败（不阻断服务）")
         logger.info("启动补跑结束：%s", summary)
     except asyncio.CancelledError:
         raise
-    except Exception:                                   # noqa: BLE001
+    except Exception:                               # noqa: BLE001
         logger.exception("启动补跑失败（不阻断服务）")
 
 

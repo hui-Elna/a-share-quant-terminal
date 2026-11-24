@@ -238,7 +238,7 @@ def test_expected_push_algos_ignores_unknown_codes(monkeypatch) -> None:
 def test_non_required_step_failure_does_not_block(monkeypatch) -> None:
     """两融 T+1 未披露等非必需步骤失败，不应阻断罗盘与推送。"""
 
-    async def fake_pipeline(trade_date, db):
+    async def fake_pipeline(trade_date, db, **kwargs):
         return {
             "steps": {
                 "snapshot": {"status": "success"},
@@ -273,7 +273,7 @@ def test_non_required_step_failure_does_not_block(monkeypatch) -> None:
 
 
 def test_required_step_failure_blocks_data_stage(monkeypatch) -> None:
-    async def fake_pipeline(trade_date, db):
+    async def fake_pipeline(trade_date, db, **kwargs):
         return {
             "steps": {
                 "snapshot": {"status": "success"},

@@ -324,6 +324,15 @@ def test_admin_catch_up_route_registered() -> None:
     assert "/api/v1/admin/ingest/{task}" in paths
 
 
+def test_today_pipeline_steps_respect_weekly_members(monkeypatch) -> None:
+    """成分默认周更时，启动补跑不能再强行每日抓取成分。"""
+    monkeypatch.setattr(cu.config, "SECTOR_MEMBERS_WEEKLY", True)
+    assert "sector_members" not in cu._today_pipeline_steps()
+
+    monkeypatch.setattr(cu.config, "SECTOR_MEMBERS_WEEKLY", False)
+    assert "sector_members" in cu._today_pipeline_steps()
+
+
 # ============================================================
 # ④b 下游数据集缺口
 # ============================================================

@@ -37,6 +37,27 @@ def test_fetch_result_summary_hides_ok_status() -> None:
     assert payload["quality_status"] == "stale"
 
 
+class _ExecDB:
+    async def execute(self, stmt):  # noqa: ANN001, ANN201
+        return None
+
+
+def test_record_quality_handles_none_coverage() -> None:
+    """源不可用时 coverage 为 None，质量日志不能再抛 TypeError。"""
+    from app.core.status import QualityStatus
+    from app.ingest.quality import QualityReport, record_quality
+
+    report = QualityReport(
+        dataset="sector_members", rows=0, expected=None, coverage=None
+    )
+    result = asyncio.run(
+        record_quality(
+            _ExecDB(), "sector_members", report, None, QualityStatus.STALE
+        )
+    )
+    assert result == 1
+
+
 def test_run_task_keeps_stale_and_skips_success_mark(monkeypatch) -> None:
     async def fake_dispatch(task, **kwargs):
         return FetchResult(rows=6, total=7, failed=1, quality_status="stale")

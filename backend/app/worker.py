@@ -334,7 +334,8 @@ def start_scheduler() -> AsyncIOScheduler:
                       id="news_crawl", name="新闻采集", replace_existing=True)
 
     scheduler.start()
-    logger.info("定时任务已启动：15:36 盘后串行链路（数据→罗盘→推送）"
+    logger.info("定时任务已启动（cron 仅兜底；进程启动时由补跑立即推进当日链路）："
+                "15:36 盘后串行链路（数据→罗盘→推送）"
                 " / 盘后每 30 分钟巡检 / 16:10 起每 2 小时数据库备份"
                 " / 17:10 信号统计 / 17:30 纸面"
                 " / 17:40 罗盘复盘回填 / 周日 11:30 板块成分 / 周日 12:00 资金流"

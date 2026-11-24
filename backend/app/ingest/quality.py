@@ -626,12 +626,15 @@ async def record_quality(
         error=None if current is QualityStatus.OK else report.error_text(),
         detail=report.to_detail(),
     )
+    coverage_text = (
+        "—" if report.coverage is None else f"{report.coverage * 100:.1f}%"
+    )
     logger.info(
-        "质量记录 dataset=%s status=%s rows=%s coverage=%.2f%% anomalies=%d",
+        "质量记录 dataset=%s status=%s rows=%s coverage=%s anomalies=%d",
         dataset,
         current.value,
         report.rows,
-        report.coverage * 100,
+        coverage_text,
         len(report.anomalies),
     )
     return 1

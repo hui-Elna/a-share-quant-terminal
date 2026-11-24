@@ -953,6 +953,43 @@ def _snapshot_rows(frame: pd.DataFrame | None, trade_date: date) -> list[dict[st
     return rows
 
 
+async def _fill_snapshot_caps(
+    session: AsyncSession, rows: list[dict[str, Any]]
+) -> None:
+    """快照源缺市值字段时，用股票池股本 × 收盘价补齐。
+
+    东财/新浪现货接口偶尔整列不返回总市值/流通市值（2026-11-24 全市场
+    ``float_cap`` 为空，直接导致市场换手率与温度无法计算）。股本来自交易所
+    名单，口径与历史市值一致，缺失时用它兜底是确定性的。
+    """
+    missing = [
+        row["code"] for row in rows
+        if row.get("close") and (
+            row.get("float_cap") is None or row.get("market_cap") is None
+        )
+    ]
+    if not missing:
+        return
+    shares = {
+        code: (total_share, float_share)
+        for code, total_share, float_share in (
+            await session.execute(
+                select(DimStock.code, DimStock.total_share, DimStock.float_share)
+                .where(DimStock.code.in_(missing))
+            )
+        ).all()
+    }
+    for row in rows:
+        close = row.get("close")
+        if close is None:
+            continue
+        total_share, float_share = shares.get(row["code"], (None, None))
+        if row.get("float_cap") is None and float_share:
+            row["float_cap"] = round(float(close) * float(float_share), 2)
+        if row.get("market_cap") is None and total_share:
+            row["market_cap"] = round(float(close) * float(total_share), 2)
+
+
 def _history_rows(
     code: str, frame: pd.DataFrame | None, source: str
 ) -> list[dict[str, Any]]:
@@ -1347,6 +1384,7 @@ async def collect_daily_snapshot(
 
             await _ensure_partition(trade_date)
             async with _db_scope(db) as session:
+                await _fill_snapshot_caps(session, rows)
                 written = await upsert_rows(
                     session, FactStockDaily, rows, ["code", "trade_date"]
                 )
@@ -1370,6 +1408,13 @@ async def collect_daily_snapshot(
             await job.finish("success", done=written, rows_written=written)
             return result
         except Exception as exc:
+            # 先回滚调用方事务：采集函数可能已写入 meta_data_quality 但尚未提交，
+            # 若直接开独立会话写错误记录，会与未提交事务互相等待（实测卡 15 分钟）。
+            if db is not None:
+                try:
+                    await db.rollback()
+                except Exception:  # noqa: BLE001
+                    logger.warning("回滚采集事务失败 task=%s", task, exc_info=True)
             if not isinstance(exc, QualityBlockedError):
                 await _record_error(dataset, trade_date, f"{type(exc).__name__}: {exc}")
             await job.finish("failed", error=f"{type(exc).__name__}: {exc}")
@@ -1848,6 +1893,13 @@ async def collect_sector_daily(
                              done=written, failed=failed_boards, rows_written=written)
             return result
         except Exception as exc:
+            # 先回滚调用方事务：采集函数可能已写入 meta_data_quality 但尚未提交，
+            # 若直接开独立会话写错误记录，会与未提交事务互相等待（实测卡 15 分钟）。
+            if db is not None:
+                try:
+                    await db.rollback()
+                except Exception:  # noqa: BLE001
+                    logger.warning("回滚采集事务失败 task=%s", task, exc_info=True)
             if not isinstance(exc, QualityBlockedError):
                 await _record_error(dataset, trade_date, f"{type(exc).__name__}: {exc}")
             await job.finish("failed", error=f"{type(exc).__name__}: {exc}")
@@ -2309,6 +2361,13 @@ async def collect_sector_members(
             )
             return result
         except Exception as exc:
+            # 先回滚调用方事务：采集函数可能已写入 meta_data_quality 但尚未提交，
+            # 若直接开独立会话写错误记录，会与未提交事务互相等待（实测卡 15 分钟）。
+            if db is not None:
+                try:
+                    await db.rollback()
+                except Exception:  # noqa: BLE001
+                    logger.warning("回滚采集事务失败 task=%s", task, exc_info=True)
             if not isinstance(exc, QualityBlockedError):
                 await _record_error(dataset, trade_date, f"{type(exc).__name__}: {exc}")
             await job.finish("failed", error=f"{type(exc).__name__}: {exc}")
@@ -2557,6 +2616,13 @@ async def collect_moneyflow(
             await job.finish("success", done=written, rows_written=written)
             return result
         except Exception as exc:
+            # 先回滚调用方事务：采集函数可能已写入 meta_data_quality 但尚未提交，
+            # 若直接开独立会话写错误记录，会与未提交事务互相等待（实测卡 15 分钟）。
+            if db is not None:
+                try:
+                    await db.rollback()
+                except Exception:  # noqa: BLE001
+                    logger.warning("回滚采集事务失败 task=%s", task, exc_info=True)
             if not isinstance(exc, QualityBlockedError):
                 await _record_error(dataset, trade_date, f"{type(exc).__name__}: {exc}")
             await job.finish("failed", error=f"{type(exc).__name__}: {exc}")
@@ -3099,6 +3165,13 @@ async def collect_indices(
                              done=written, failed=fetched.failed, rows_written=written)
             return result
         except Exception as exc:
+            # 先回滚调用方事务：采集函数可能已写入 meta_data_quality 但尚未提交，
+            # 若直接开独立会话写错误记录，会与未提交事务互相等待（实测卡 15 分钟）。
+            if db is not None:
+                try:
+                    await db.rollback()
+                except Exception:  # noqa: BLE001
+                    logger.warning("回滚采集事务失败 task=%s", task, exc_info=True)
             if not isinstance(exc, QualityBlockedError):
                 await _record_error(dataset, trade_date, f"{type(exc).__name__}: {exc}")
             await job.finish("failed", error=f"{type(exc).__name__}: {exc}")

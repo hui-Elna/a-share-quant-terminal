@@ -251,7 +251,8 @@ async def _run_data_stage(
             blocked=True,
         )
 
-    pipeline = await run_daily_pipeline(trade_date, db)
+    # 恢复场景只补缺：已新鲜的高成本步骤（估值/板块/资金流）不再重复拉取。
+    pipeline = await run_daily_pipeline(trade_date, db, skip_if_fresh=True)
     steps = pipeline.get("steps") or {}
     # 只把罗盘/推送真正依赖的步骤纳入门禁：两融 T+1 披露、北向为空等
     # 非必需步骤失败不应阻断盘后链路（否则每个交易日都会卡在 margin）。

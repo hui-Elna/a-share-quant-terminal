@@ -58,7 +58,7 @@ logger = get_logger("main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("=" * 56)
-    logger.info("GFNA V5 启动中 …")
+    logger.info("GFNA 启动中（API 版本 5.0.0；代码含 V10 采集与盘后串行链路）…")
     logger.info("=" * 56)
 
     # NO_PROXY 里的 "[::1]" 会让 httpx/openai 初始化报 Invalid port，
@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI):
         from app.catch_up import run_catch_up_in_background
         catch_up_task = asyncio.create_task(run_catch_up_in_background())
 
-    logger.info("GFNA V5 启动完成 ✅")
+    logger.info("GFNA 启动完成 ✅（启动补跑会立即推进当日数据→罗盘→推送，cron 仅兜底）")
     try:
         yield
     finally:

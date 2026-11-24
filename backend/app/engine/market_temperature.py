@@ -231,7 +231,9 @@ def _to_row(record: dict[str, Any], raw_row: pd.Series | None) -> dict[str, Any]
         "amount": float(raw_row["amount"]) if raw_row is not None and _finite(raw_row.get("amount")) else None,
         "amount_vs_ma20": float(raw_row["amount_vs_ma20"]) if raw_row is not None and _finite(raw_row.get("amount_vs_ma20")) else None,
         "index_vol_annual": float(raw_row["rv20"]) if raw_row is not None and _finite(raw_row.get("rv20")) else None,
-        "temp_score": record["temp_score"],
+        # 关键子项缺失时 combine 返回 None，经 DataFrame merge 会变成 NaN，
+        # 必须还原成 NULL：numeric 存 NaN 可读性差，JSONB 还会直接拒收。
+        "temp_score": int(record["temp_score"]) if _finite(record.get("temp_score")) else None,
         "confidence": record["confidence"],
         "components": to_jsonable(record["components"]),
         "src": "engine",

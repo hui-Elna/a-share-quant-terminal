@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import TIMEZONE
 from app.core.status import QualityStatus
 from app.db.models import MetaDataQuality
+from app.engine._db import to_jsonable
 
 # dataset -> (展示名, 过期小时数, 是否关键数据集)
 DATASET_META: dict[str, tuple[str, int, bool]] = {
@@ -81,6 +82,10 @@ async def write_freshness(
     current = QualityStatus(status)
     attempted_at = now or datetime.now()
     error_text = error[:2000] if error else None
+    # detail 来自引擎返回值，可能含 NaN/Infinity（pandas 空值）；JSONB 会拒收，
+    # 会让本该成功的步骤在写新鲜度时报错并把共享事务带进 aborted 状态。
+    if detail is not None:
+        detail = to_jsonable(detail)
 
     values: dict[str, Any] = {
         "dataset": dataset,

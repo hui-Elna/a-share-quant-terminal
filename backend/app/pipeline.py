@@ -590,6 +590,9 @@ async def run_daily_pipeline(
             except Exception as exc:                  # noqa: BLE001
                 logger.exception("步骤 %s 失败", step)
                 summary[step] = {"status": TaskStatus.FAILED.value, "error": str(exc)}
+                # 失败语句可能已让共享事务进入 aborted（如 JSONB 拒收 NaN），
+                # 不回滚的话后续每一步都会报 InFailedSQLTransaction。
+                await _reset_session(db)
         from app.quality.invariants import log_invariants
         await log_invariants(logger)
         logger.info("每日流水线结束")
