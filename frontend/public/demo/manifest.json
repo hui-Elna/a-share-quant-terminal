@@ -27,7 +27,6 @@
     "stock_600519_kline.json",
     "stock_search.json",
     "stock_sparkline.json",
-    "watchlist.json",
     "sector_sparkline.json"
   ]
 }

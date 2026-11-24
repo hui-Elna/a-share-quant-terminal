@@ -5,7 +5,6 @@ import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@ta
 import App from './App'
 import { ApiError } from './api/client'
 import { recordStatus } from './lib/statusFeed'
-import { hydrateWatchlist } from './lib/watchlist'
 import './index.css'
 
 /**
@@ -69,6 +68,3 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     </QueryClientProvider>
   </React.StrictMode>,
 )
-
-// 启动即拉取服务端自选状态（localStorage 仅作缓存；后端不可用时保留本地）
-void hydrateWatchlist()

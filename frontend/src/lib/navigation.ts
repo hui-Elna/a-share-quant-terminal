@@ -12,7 +12,6 @@ import {
   Compass,
   Info,
   LineChart,
-  Star,
   TrendingUp,
   type LucideIcon,
 } from 'lucide-react'
@@ -32,7 +31,6 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/index-compare', label: '指数对比', icon: ArrowLeftRight, keywords: ['风格', '轮动', '创业板50', '红利低波'] },
   { to: '/algo-center', label: '选股中心', icon: Brain, keywords: ['策略', '天梯', '共识', '回测'] },
   { to: '/paper', label: '纸面跟踪', icon: LineChart, keywords: ['组合', '净值'] },
-  { to: '/watchlist', label: '自选', icon: Star, keywords: ['自选股', '提醒'] },
   { to: '/jobs', label: '任务监控', icon: Activity, keywords: ['调度', '数据'] },
   { to: '/about', label: '关于', icon: Info, keywords: ['说明'] },
 ]

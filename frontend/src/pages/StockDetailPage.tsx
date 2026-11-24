@@ -19,7 +19,6 @@ import type { StockFeatures, StockLatest } from '../types/stock'
 import type { Freshness } from '../types/common'
 import AlgoRadarChart from '../components/AlgoRadarChart'
 import FreshnessBadge from '../components/FreshnessBadge'
-import WatchButton from '../components/WatchButton'
 import PageHeader from '../components/PageHeader'
 import { ErrorState, LoadingState, EmptyState } from '../components/StateViews'
 import {
@@ -308,7 +307,6 @@ export default function StockDetailPage() {
             {latest?.is_limit_down && (
               <span className="text-[12px] px-2 py-0.5 rounded-full bg-down/10 text-down-strong">跌停</span>
             )}
-            <WatchButton code={code} name={stock.name} showLabel size="md" />
           </>
         }
         description={

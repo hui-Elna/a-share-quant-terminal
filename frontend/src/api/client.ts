@@ -230,7 +230,6 @@ async function requestOnce<T>(url: string, options: RequestOptions): Promise<T> 
 
 /**
  * 演示模式请求：GET 读取 public/demo 快照；写操作拒绝。
- * `/algo/hits` 语义是只读查询（POST 仅因 codes 可能很长），在演示模式返回空列表。
  */
 async function demoRequest<T>(
   path: string,
@@ -239,10 +238,6 @@ async function demoRequest<T>(
 ): Promise<T> {
   const clean = path.split('?')[0].replace(/\/+$/, '') || '/'
   if (method !== 'GET') {
-    if (method === 'POST' && clean === '/algo/hits') {
-      const days = (options.body as { days?: number } | undefined)?.days ?? 10
-      return { items: [], days } as T
-    }
     throw new ApiError({
       code: 'DEMO_READONLY',
       message: '演示模式为只读，写操作已禁用',

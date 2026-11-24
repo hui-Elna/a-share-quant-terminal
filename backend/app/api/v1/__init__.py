@@ -2,7 +2,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
-    admin, algo, articles, backtest, compass, market, meta, paper, stats, stocks, watchlist,
+    admin, algo, articles, backtest, compass, market, meta, paper, stats, stocks,
 )
 
 api_router = APIRouter()
@@ -15,7 +15,6 @@ api_router.include_router(backtest.router)
 api_router.include_router(paper.router)
 api_router.include_router(meta.router)
 api_router.include_router(admin.router)
-api_router.include_router(watchlist.router)
 api_router.include_router(compass.router)
 
 __all__ = ["api_router"]

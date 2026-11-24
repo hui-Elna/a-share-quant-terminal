@@ -17,10 +17,7 @@ import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { RefreshCw } from 'lucide-react'
 import { useDashboard, useIndexSeries, useTradeCalendar } from '../hooks/useDashboard'
-import { useWatchSignals, useWatchlist } from '../hooks/useWatchSignals'
 import { useProviderHealth } from '../hooks/useProviderHealth'
-import WatchButton from '../components/WatchButton'
-import WatchlistPanel from '../components/WatchlistPanel'
 import IndexCard, {
   IndexCompareHeader,
   computeIndexRanks,
@@ -245,7 +242,6 @@ function SectorRankList({
                     >
                       实力 {strengthLeader.name}
                       <span className={`num ${pctColor(strengthLeader.change_pct)}`}>{fmtPct(strengthLeader.change_pct)}</span>
-                      <WatchButton code={strengthLeader.code} name={strengthLeader.name} />
                     </span>
                   )}
                   {sentimentLeader && (
@@ -255,7 +251,6 @@ function SectorRankList({
                     >
                       情绪 {sentimentLeader.name}
                       <span className={`num ${pctColor(sentimentLeader.change_pct)}`}>{fmtPct(sentimentLeader.change_pct)}</span>
-                      <WatchButton code={sentimentLeader.code} name={sentimentLeader.name} />
                     </span>
                   )}
                 </div>
@@ -282,8 +277,6 @@ export default function DashboardPage() {
   const [selectedDate, setSelectedDate] = useState('')
   const dashboard = useDashboard(selectedDate || undefined)
   const calendar = useTradeCalendar(720)
-  const watchlist = useWatchlist()
-  const watchHits = useWatchSignals(watchlist)
   const providerHealth = useProviderHealth(1)
   const degradedSources = (providerHealth.data?.items ?? []).filter(
     (item) => item.degraded > 0,
@@ -465,19 +458,6 @@ export default function DashboardPage() {
         <>
           {/* ========== 市场状态与配置（V7 T1） ========== */}
           <MarketOverview tradeDate={selectedDate || undefined} />
-
-          {/* ========== 自选股快捷区 ========== */}
-          {watchlist.length > 0 && (
-            <WatchlistPanel
-              watchlist={watchlist}
-              hits={watchHits.data?.items ?? []}
-              latestSignalDate={watchHits.data?.latest_signal_date ?? null}
-              loading={watchHits.isLoading}
-              error={watchHits.isError ? watchHits.error : undefined}
-              onRetry={() => watchHits.refetch()}
-              compact
-            />
-          )}
 
           {/* ========== 指数多周期对比条 ========== */}
           {indexCards.length > 0 && (

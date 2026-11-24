@@ -8,7 +8,6 @@
  * /ladder      策略天梯（重定向到 /algo-center#ladder）
  * /paper       纸面组合跟踪
  * /stocks/:code 个股详情
- * /watchlist   自选股与信号提醒
  * /jobs        任务监控
  * /about       关于
  * *            404
@@ -30,7 +29,6 @@ const IndexComparePage = lazy(() => import('./pages/IndexComparePage'))
 const AlgoCenter = lazy(() => import('./pages/AlgoCenter'))
 const PaperPage = lazy(() => import('./pages/PaperPage'))
 const StockDetailPage = lazy(() => import('./pages/StockDetailPage'))
-const WatchlistPage = lazy(() => import('./pages/WatchlistPage'))
 const JobsPage = lazy(() => import('./pages/JobsPage'))
 const AboutPage = lazy(() => import('./pages/AboutPage'))
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage'))
@@ -50,7 +48,6 @@ export default function App() {
           <Route path="/ladder" element={<Navigate to="/algo-center#ladder" replace />} />
           <Route path="/paper" element={<PaperPage />} />
           <Route path="/stocks/:code" element={<StockDetailPage />} />
-          <Route path="/watchlist" element={<WatchlistPage />} />
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="*" element={<NotFoundPage />} />

@@ -39,13 +39,6 @@ from app.strategy.strategies import CANDIDATE_SPECS, SPECS, get_spec, list_specs
 router = APIRouter(prefix="/api/v1/algo", tags=["选股"])
 
 
-class WatchHitsRequest(BaseModel):
-    """自选股命中查询体（只读）。"""
-
-    codes: list[str] = Field(default_factory=list, description="1–6 位数字代码，去重后 ≤100")
-    days: int = Field(10, ge=1, le=60, description="回看交易日数")
-
-
 class PreviewRequest(BaseModel):
     """条件树预览体（只读，不写 stg_run）。"""
 
@@ -222,35 +215,6 @@ async def get_algo_consensus(
     payload["min_count"] = min_count
     payload["freshness"] = freshness[0] if freshness else None
     payload["note"] = "各策略评分量纲不同，榜单按命中策略数排序，不做跨策略分数平均。"
-    return payload
-
-
-@router.post("/hits")
-async def get_watchlist_hits(
-    body: WatchHitsRequest,
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    """自选股近 N 个交易日的策略命中（只读查询，语义上等价 GET）。
-
-    用 POST 是因为自选代码列表可能很长；SQL 内全部使用参数绑定。
-    """
-    from app.engine.watch_hits import normalize_hits_codes, watchlist_hits
-    from app.services.freshness import get_freshness_items
-
-    codes = normalize_hits_codes(body.codes)
-    payload = await watchlist_hits(db, codes, days=body.days)
-    freshness = await get_freshness_items(db, ["algo_run"])
-    payload["freshness"] = freshness[0] if freshness else None
-    payload["days"] = body.days
-    # C1：命中明细一次全量返回（按自选代码上限 100 控制规模），补充分页元信息
-    payload.update(
-        pagination_meta(
-            total=len(payload.get("items") or []),
-            limit=max(1, len(payload.get("items") or [])),
-            offset=0,
-            returned=len(payload.get("items") or []),
-        )
-    )
     return payload
 
 

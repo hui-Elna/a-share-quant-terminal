@@ -211,26 +211,6 @@ export function rowScore(row: AlgoStockRow): number | null {
   return null
 }
 
-/** 自选股命中的单条策略信号（5.6） */
-export interface WatchHit {
-  code: string
-  name: string
-  algo_code: string
-  algo_name: string
-  signal_date: string
-  rank: number | null
-  /** 去重键：algo_code:signal_date */
-  hit_id: string
-}
-
-/** POST /api/v1/algo/hits（5.6，C1 追加分页元信息） */
-export interface WatchHitsResponse extends PaginationMeta {
-  items: WatchHit[]
-  latest_signal_date: string | null
-  freshness: Freshness | null
-  days?: number
-}
-
 /** run 级市场门槛摘要（A4/B4/B5，0 信号时解释原因） */
 export interface MarketGate {
   index_code: string | null

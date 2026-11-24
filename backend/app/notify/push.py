@@ -25,12 +25,10 @@ from app.core.config import (
     PUSH_MODE,
     PUSH_OBSERVATION,
     PUSH_TOP_N,
-    PUSH_WATCHLIST_ONLY,
     WECOM_WEBHOOK_URL,
 )
 from app.db.models.push import PushLog
 from app.db.models.strategy import StgRun, StgSignal
-from app.engine.watch_state import load_watchlist_state
 from app.strategy.strategies import CANDIDATE_SPECS, SPECS, get_spec
 
 logger = logging.getLogger(__name__)
@@ -135,9 +133,7 @@ def build_message(
     trade_date: date,
     sections: list[dict[str, Any]],
     frontend_url: str = PUSH_FRONTEND_URL,
-    watchlist_codes: set[str] | None = None,
 ) -> str:
-    watchlist = watchlist_codes or set()
     lines = [f"## GFNA 选股播报 | {trade_date.isoformat()}", ""]
     for section in sections:
         name = section.get("algo_name") or section["algo_code"]
@@ -150,10 +146,9 @@ def build_message(
         else:
             for item in items:
                 reason = _one_line_reason(item)
-                marker = " [自选]" if str(item.get("code")) in watchlist else ""
                 lines.append(
                     f"{item['rank']}. {item['name']}({item['code']}) "
-                    f"{item['summary']} — {reason}{marker}"
+                    f"{item['summary']} — {reason}"
                 )
         lines.append("")
     lines.append(f"查看：{frontend_url}")
@@ -180,7 +175,7 @@ def _safe_error(exc: BaseException) -> str:
     return f"{type(exc).__name__}: 企业微信推送请求失败"
 
 
-async def _post_wecom(url: str, content: str, *, max_attempts: int = 3) -> int:
+async def post_wecom_markdown(url: str, content: str, *, max_attempts: int = 3) -> int:
     """发送 markdown；成功返回尝试次数，失败抛最后一个异常。"""
     payload = {"msgtype": "markdown", "markdown": {"content": content}}
     last_exc: BaseException | None = None
@@ -215,20 +210,10 @@ def _signal_item(algo_code: str, row: StgSignal) -> dict[str, Any]:
     }
 
 
-async def _load_watchlist_codes(db: AsyncSession) -> set[str]:
-    try:
-        state = await load_watchlist_state(db)
-        return {str(code).zfill(6) for code in (state.get("codes") or [])}
-    except Exception:  # noqa: BLE001 - 自选读取失败不阻断推送
-        logger.warning("读取自选失败，按空集处理", exc_info=True)
-        return set()
-
-
 async def _load_sections(
     db: AsyncSession,
     trade_date: date,
     algos: list[str],
-    watchlist_codes: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     sections: list[dict[str, Any]] = []
     for code in algos:
@@ -255,19 +240,12 @@ async def _load_sections(
                 )
             ).scalars().all()
             items = [_signal_item(code, row) for row in rows]
-        if PUSH_WATCHLIST_ONLY:
-            watchlist = watchlist_codes or set()
-            items = [item for item in items if str(item["code"]) in watchlist]
         sections.append(
             {
                 "algo_code": code,
                 "algo_name": spec.name,
                 "run_id": run.run_id if run is not None else None,
-                "signal_count": (
-                    len(items)
-                    if PUSH_WATCHLIST_ONLY
-                    else int(getattr(run, "signal_count", 0) or 0)
-                ),
+                "signal_count": int(getattr(run, "signal_count", 0) or 0),
                 "items": items,
                 "observed": observed,
             }
@@ -316,16 +294,9 @@ async def push_daily_results(
             trade_date = await _latest_trade_date(db, algos)
         if trade_date is None:
             return {"error": "没有可推送的选股 run"}
-        watchlist_codes = await _load_watchlist_codes(db)
-        sections = await _load_sections(db, trade_date, algos, watchlist_codes)
+        sections = await _load_sections(db, trade_date, algos)
         if PUSH_MODE == "signals_only":
             sections = [item for item in sections if item["signal_count"] > 0]
-        if PUSH_WATCHLIST_ONLY and not any(item["signal_count"] for item in sections):
-            return {
-                "skipped": "自选无命中",
-                "trade_date": trade_date.isoformat(),
-                "watchlist_count": len(watchlist_codes),
-            }
         if not sections:
             return {"skipped": "没有满足推送模式的策略", "trade_date": trade_date.isoformat()}
 
@@ -357,9 +328,7 @@ async def push_daily_results(
         if not pending_sections:
             return {"skipped": "全部已推送", "trade_date": trade_date.isoformat()}
 
-        message = build_message(
-            trade_date, pending_sections, watchlist_codes=watchlist_codes
-        )
+        message = build_message(trade_date, pending_sections)
         if dry:
             await db.rollback()
             return {
@@ -375,7 +344,7 @@ async def push_daily_results(
 
         await db.flush()
         try:
-            attempts = await _post_wecom(WECOM_WEBHOOK_URL, message)
+            attempts = await post_wecom_markdown(WECOM_WEBHOOK_URL, message)
         except Exception as exc:  # noqa: BLE001
             error = _safe_error(exc)
             for row in rows:

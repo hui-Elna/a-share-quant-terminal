@@ -37,7 +37,6 @@ const EXACT: Record<string, string> = {
   '/meta/freshness': 'freshness.json',
   '/meta/provider-health': 'provider_health.json',
   '/meta/trade-calendar': 'trade_calendar.json',
-  '/watchlist': 'watchlist.json',
   '/stocks/sparkline/batch': 'stock_sparkline.json',
   '/stocks/search': 'stock_search.json',
   '/crawl/auto/status': 'crawl_status.json',

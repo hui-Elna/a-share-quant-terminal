@@ -11,13 +11,11 @@ import { motion } from 'framer-motion'
 import { BarChart3, Moon, Search, Sun } from 'lucide-react'
 import { useTheme } from './ThemeProvider'
 import StatusCenter from './StatusCenter'
-import { useWatchBadge } from '../hooks/useWatchSignals'
 import { NAV_ITEMS, PALETTE_OPEN_EVENT } from '../lib/navigation'
 import { cn } from '../lib/utils'
 
 export default function Navbar() {
   const { theme, toggle } = useTheme()
-  const { newCount } = useWatchBadge()
   const [query, setQuery] = useState('')
   const navigate = useNavigate()
 
@@ -92,7 +90,6 @@ export default function Navbar() {
             <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto scrollbar-thin">
               {NAV_ITEMS.map((item) => {
               const Icon = item.icon
-              const isWatchlist = item.to === '/watchlist'
               return (
                 <NavLink
                   key={item.to}
@@ -108,18 +105,7 @@ export default function Navbar() {
                         : 'text-muted-foreground hover:text-foreground',
                     )
                   }
-                  title={
-                    isWatchlist && newCount > 0
-                      ? `自选股有 ${newCount} 条新信号`
-                      : item.label
-                  }
-                  aria-label={
-                    isWatchlist
-                      ? newCount > 0
-                        ? `自选股有 ${newCount} 条新信号`
-                        : '自选股'
-                      : undefined
-                  }
+                  title={item.label}
                 >
                   {({ isActive }) => (
                     <>
@@ -149,16 +135,6 @@ export default function Navbar() {
                             )}
                             strokeWidth={isActive ? 2.2 : 1.8}
                           />
-                          {isWatchlist && newCount > 0 && (
-                            <span
-                              aria-hidden="true"
-                              className="absolute -right-2.5 -top-2 min-w-[17px] h-[17px] px-1 rounded-full
-                                bg-alert text-background text-[11px] font-bold leading-[17px] text-center
-                                border border-background num"
-                            >
-                              {newCount > 9 ? '9+' : newCount}
-                            </span>
-                          )}
                         </span>
                         <span className="hidden lg:inline">{item.label}</span>
                       </span>

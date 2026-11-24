@@ -94,7 +94,6 @@ EXPORTS: list[tuple[str, str]] = [
     ("stock_600519_kline.json", "/api/v1/stocks/600519/kline?limit=250"),
     ("stock_search.json", "/api/v1/stocks/search?q=%E8%8C%85%E5%8F%B0&limit=20"),
     ("stock_sparkline.json", "/api/v1/stocks/sparkline/batch?codes=600519,000001,601318&days=30"),
-    ("watchlist.json", "/api/v1/watchlist"),
 ]
 
 

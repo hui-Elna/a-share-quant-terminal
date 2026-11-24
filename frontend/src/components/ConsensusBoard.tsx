@@ -14,7 +14,6 @@ import { useConsensus, useLadder } from '../hooks/useAlgo'
 import { useSparklineBatch } from '../hooks/useStock'
 import type { ConsensusAlgoHit, ConsensusItem, LadderHorizonStats } from '../types/algo'
 import { summarizeSample } from '../lib/sample'
-import { getWatchlist, toggleWatch, MAX_WATCHLIST } from '../lib/watchlist'
 import { fmtMetricValue, fmtNumber, fmtPct, fmtScore, pctColor } from '../lib/format'
 import { EmptyState, ErrorState } from './StateViews'
 import FreshnessBadge from './FreshnessBadge'
@@ -187,8 +186,6 @@ export default function ConsensusBoard({
   const [minCount, setMinCount] = useState(2)
   const [page, setPage] = useState(1)
   const [expandedCode, setExpandedCode] = useState<string | null>(null)
-  const [watchlist, setWatchlist] = useState<string[]>(() => getWatchlist())
-  const [watchHint, setWatchHint] = useState<string | null>(null)
 
   const pageSize = 20
   const query = useConsensus(minCount, {
@@ -224,18 +221,6 @@ export default function ConsensusBoard({
     }
     return map
   }, [sparkQuery.data])
-
-  const handleWatch = (code: string) => {
-    const result = toggleWatch(code)
-    setWatchlist(getWatchlist())
-    if (result.reason === 'limit') {
-      setWatchHint(`自选上限 ${MAX_WATCHLIST} 只，请先在自选页移除`)
-    } else if (result.reason === 'storage') {
-      setWatchHint('本浏览器不保存自选，刷新后会丢失')
-    } else {
-      setWatchHint(null)
-    }
-  }
 
   return (
     <section className="card p-4 sm:p-5" aria-labelledby="consensus-title">
@@ -334,13 +319,11 @@ export default function ConsensusBoard({
                     <th className="text-right font-medium py-2 px-2 min-w-[6.5rem]">30 日走势</th>
                     <th className="text-right font-medium py-2 px-2">综合分</th>
                     <th className="text-right font-medium py-2 px-2 min-w-[10rem]">命中策略</th>
-                    <th className="text-right font-medium py-2 pr-1 min-w-[5.5rem]">自选</th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((item) => {
                     const isExpanded = expandedCode === item.code
-                    const watched = watchlist.includes(item.code)
                     return (
                       <Fragment key={item.code}>
                         <tr
@@ -399,26 +382,10 @@ export default function ConsensusBoard({
                               </span>
                             </button>
                           </td>
-                          <td className="py-2.5 pr-1 text-right">
-                            <button
-                              type="button"
-                              onClick={() => handleWatch(item.code)}
-                              aria-pressed={watched}
-                              aria-label={watched ? `取消自选 ${item.name}` : `加入自选 ${item.name}`}
-                              className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[12px] transition-colors ${
-                                watched
-                                  ? 'border-warning/50 bg-warning/10 text-warning'
-                                  : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'
-                              }`}
-                            >
-                              <Star className={`w-3.5 h-3.5 ${watched ? 'fill-current' : ''}`} />
-                              {watched ? '已自选' : '自选'}
-                            </button>
-                          </td>
                         </tr>
                         {isExpanded && (
                           <tr id={`consensus-detail-${item.code}`} className="border-b border-border/60 bg-muted/20">
-                            <td colSpan={8} className="p-3">
+                            <td colSpan={7} className="p-3">
                               <HitDetails
                                 item={item}
                                 onOpenAlgo={onOpenAlgo}
@@ -450,8 +417,6 @@ export default function ConsensusBoard({
               compact
             />
           )}
-
-          {watchHint && <p className="text-[12px] text-warning">{watchHint}</p>}
 
           <p className="border-t border-border/60 pt-3 text-[12px] leading-relaxed text-muted-foreground">
             各策略评分量纲不同，榜单按命中策略数排序，不做跨策略分数平均。

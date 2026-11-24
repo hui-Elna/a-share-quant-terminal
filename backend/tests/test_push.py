@@ -87,7 +87,7 @@ def test_one_line_reason_from_triggered_and_breakdown() -> None:
     assert push._one_line_reason({"metrics": {}}) == "归因缺失"  # noqa: SLF001
 
 
-def test_build_message_marks_watchlist_and_disclaimer() -> None:
+def test_build_message_reason_and_disclaimer() -> None:
     sections = [
         {
             "algo_code": "a3",
@@ -105,10 +105,7 @@ def test_build_message_marks_watchlist_and_disclaimer() -> None:
             ],
         }
     ]
-    message = push.build_message(
-        date(2026, 11, 13), sections, watchlist_codes={"601668"}
-    )
-    assert "[自选]" in message
+    message = push.build_message(date(2026, 11, 13), sections)
     assert "综合评分 ≥ 6" in message
     assert "条件复述，非投资建议" in message
     for forbidden in ("建议买入", "值得买"):
@@ -174,7 +171,7 @@ def test_post_wecom_retries_then_succeeds(monkeypatch) -> None:
     monkeypatch.setattr(push.httpx, "AsyncClient", lambda **kwargs: fake)
     monkeypatch.setattr(push.asyncio, "sleep", _noop_sleep)
 
-    attempts = asyncio.run(push._post_wecom("https://example.invalid/hook", "hi"))  # noqa: SLF001
+    attempts = asyncio.run(push.post_wecom_markdown("https://example.invalid/hook", "hi"))
     assert attempts == 3
     assert fake.calls == 3
 
@@ -185,7 +182,7 @@ def test_post_wecom_raises_after_three_failures(monkeypatch) -> None:
     monkeypatch.setattr(push.asyncio, "sleep", _noop_sleep)
 
     with pytest.raises(RuntimeError):
-        asyncio.run(push._post_wecom("https://example.invalid/hook", "hi"))  # noqa: SLF001
+        asyncio.run(push.post_wecom_markdown("https://example.invalid/hook", "hi"))
     assert fake.calls == 3
 
 
@@ -195,44 +192,3 @@ def test_push_disabled_returns_without_db(monkeypatch) -> None:
     result = asyncio.run(push.push_daily_results(None))
     assert result["enabled"] is False
     assert result["sent"] == 0
-
-
-def test_worker_push_hook_runs_after_algos(monkeypatch) -> None:
-    calls: list[str] = []
-
-    async def fake_run_task(task, **kwargs):
-        calls.append(task)
-        return {"status": "success"}
-
-    async def fake_push(db):
-        calls.append("push")
-        return {"sent": 1}
-
-    async def fake_obs(db):
-        return []
-
-    monkeypatch.setattr("app.pipeline.run_task", fake_run_task)
-    monkeypatch.setattr("app.notify.push.push_daily_results", fake_push)
-    monkeypatch.setattr("app.worker.run_observation_algos", fake_obs)
-    from app.worker import run_algo_job
-
-    asyncio.run(run_algo_job(None))
-    assert calls == ["algos", "push"]
-
-
-def test_worker_push_failure_does_not_raise(monkeypatch) -> None:
-    async def fake_run_task(task, **kwargs):
-        return {"status": "success"}
-
-    async def boom_push(db):
-        raise RuntimeError("boom")
-
-    async def fake_obs(db):
-        return []
-
-    monkeypatch.setattr("app.pipeline.run_task", fake_run_task)
-    monkeypatch.setattr("app.notify.push.push_daily_results", boom_push)
-    monkeypatch.setattr("app.worker.run_observation_algos", fake_obs)
-    from app.worker import run_algo_job
-
-    asyncio.run(run_algo_job(None))

@@ -22,7 +22,6 @@ from app.db.models.meta import (
 )
 from app.db.models.news import CrawlLog, NewsArticle, NewsSource
 from app.db.models.push import PushLog
-from app.db.models.state import WatchlistState
 from app.db.models.strategy import (
     BacktestGrid, BacktestGridCell, BacktestRun, OOSRun, PaperNav, PaperPortfolio,
     StgRun, StgSignal, StgSignalPerf,
@@ -46,8 +45,6 @@ __all__ = [
     "PaperPortfolio", "PaperNav",
     # 推送
     "PushLog",
-    # 应用状态
-    "WatchlistState",
     # 仓位罗盘
     "DimEtfSectorMap", "FactEtfDaily", "FactSectorSentimentPercentile",
     "FactDecisionCard", "FactDecisionCheck", "FactScenarioTrigger",
