@@ -87,6 +87,44 @@ async def trigger_catch_up(
     }
 
 
+@router.post("/daily-chain")
+async def trigger_daily_chain(
+    background_tasks: BackgroundTasks,
+    trade_date: Optional[date] = Query(None, description="目标交易日，默认当前应推进日"),
+    run_data: bool = Query(False, description="是否在数据未就绪时先跑完整采集流水线"),
+    background: bool = Query(True, description="是否后台执行"),
+    _admin: AdminDep = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """手动推进「数据 → 仓位罗盘 → 机器人推送」串行链路。
+
+    默认只补齐罗盘与推送；显式 `run_data=true` 才会重跑完整采集（耗时长，建议后台）。
+    """
+    from app.daily_chain import run_daily_chain, run_daily_chain_background
+
+    if background or run_data:
+        background_tasks.add_task(
+            run_daily_chain_background, trade_date, run_data=run_data, reason="admin"
+        )
+        return {
+            "status": "accepted",
+            "mode": "background",
+            "run_data": run_data,
+            "hint": "进度见任务监控 / GET /api/v1/meta/jobs?task=daily_chain",
+        }
+    return await run_daily_chain(
+        db, trade_date, run_data=False, reason="admin"
+    )
+
+
+@router.post("/backup")
+def trigger_backup(_admin: AdminDep = None) -> dict:
+    """立即执行一次数据库备份；返回文件路径、大小、校验和与清理结果。"""
+    from app.services.backup import backup_database
+
+    return backup_database(reason="admin")
+
+
 @router.post("/seed-demo")
 async def seed_demo(_admin: AdminDep = None, db: AsyncSession = Depends(get_db)) -> dict:
     """灌入确定性演示数据，仅 `ENV=demo` 可用。用于无网环境验收全链路。"""

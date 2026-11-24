@@ -14,6 +14,11 @@
       · 结构缺表/缺列（未版本化的旧库）→ 拒绝启动并给出修复指引，
         避免把漂移库误标成 head。
 
+迁移前备份（P0-1）：
+  - 生产库升级前自动执行一次 `pg_dump`；备份失败则阻止迁移；
+  - `*_test` / `*_demo` 库自动跳过；
+  - 紧急情况下可用 `--skip-backup` 或 `SKIP_MIGRATION_BACKUP=1` 跳过。
+
 用法：
   `python scripts/migrate_db.py --phase pre`   # bootstrap 前：已有版本库先增量升级
   `python scripts/migrate_db.py --phase post`  # bootstrap 后：全新库 stamp head / 校验版本
@@ -85,11 +90,49 @@ def _alembic_config() -> Config:
     return config
 
 
-def _upgrade(config: Config, engine) -> int:
+def _backup_before_upgrade(target, *, skip_backup: bool) -> int:
+    """迁移前备份；0=可继续，1=备份失败应阻止迁移。"""
+    if skip_backup:
+        logger.warning("已显式跳过迁移前备份")
+        return 0
+    from app.services.backup import backup_database
+
+    backup = backup_database(
+        reason="pre_migrate",
+        database=target.database,
+        host=target.host,
+        port=target.port,
+        user=target.username,
+        password=target.password,
+    )
+    if backup["status"] not in {"success", "skipped"}:
+        logger.error(
+            "迁移前备份失败，已阻止迁移：%s。"
+            "可修复备份环境后重试，或显式 --skip-backup 跳过（不推荐）。",
+            backup.get("error"),
+        )
+        return 1
+    logger.info(
+        "迁移前备份 %s：%s", backup["status"], backup.get("path") or backup.get("reason")
+    )
+    return 0
+
+
+def _upgrade(config: Config, engine, target, *, skip_backup: bool = False) -> int:
+    """增量迁移；已处于 head 时直接返回，避免每次启动都做一次全库备份。"""
+    from alembic.script import ScriptDirectory
+
     with engine.connect() as conn:
         current = conn.execute(
             text("SELECT version_num FROM alembic_version")
         ).scalar()
+    head = ScriptDirectory.from_config(config).get_current_head()
+    if head and current == head:
+        logger.info("数据库已是 head（%s），无需迁移", current)
+        print(f"[migrate] database already at head: {current}", flush=True)
+        return 0
+    if _backup_before_upgrade(target, skip_backup=skip_backup):
+        return 1
     logger.info("检测到 alembic_version=%s，执行增量迁移 ...", current)
     command.upgrade(config, "head")
     with engine.connect() as conn:
@@ -127,10 +170,17 @@ def main() -> int:
         "--phase", choices=("pre", "post"), default="post",
         help="pre=建表前先升级已有版本库；post=建表后校验/标记版本",
     )
+    parser.add_argument(
+        "--skip-backup", action="store_true",
+        help="跳过迁移前备份（仅紧急修复使用）",
+    )
     args = parser.parse_args()
 
     setup_logging()
     target = _target_url()
+    skip_backup = args.skip_backup or os.getenv(
+        "SKIP_MIGRATION_BACKUP", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
     if not _database_exists(target):
         if args.phase == "pre":
             logger.info(
@@ -153,10 +203,10 @@ def main() -> int:
                     "未检测到 alembic_version，跳过预迁移（建表后由 --phase post 标记基线）"
                 )
                 return 0
-            return _upgrade(config, engine)
+            return _upgrade(config, engine, target, skip_backup=skip_backup)
 
         if has_version:
-            return _upgrade(config, engine)
+            return _upgrade(config, engine, target, skip_backup=skip_backup)
 
         missing = _missing_objects(engine)
         if missing:

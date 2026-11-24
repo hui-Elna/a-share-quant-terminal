@@ -89,6 +89,31 @@ jobs:
         run: alembic upgrade head
       - name: Integration tests
         run: PYTHONPATH=. pytest tests/integration -q
+      - name: Seed demo data and full history for API tests
+        run: |
+          END=$(python - <<'PY'
+          from datetime import date, timedelta
+          d = date.today()
+          while d.weekday() >= 5:
+              d -= timedelta(days=1)
+          print(d.isoformat())
+          PY
+          )
+          START=$(python - <<'PY'
+          from datetime import date, timedelta
+          d = date.today()
+          while d.weekday() >= 5:
+              d -= timedelta(days=1)
+          print((d - timedelta(days=260)).isoformat())
+          PY
+          )
+          PYTHONPATH=. python scripts/pipeline_cli.py demo
+          PYTHONPATH=. python scripts/pipeline_cli.py features --start "$START" --end "$END"
+          PYTHONPATH=. python scripts/pipeline_cli.py scores --start "$START" --end "$END"
+          PYTHONPATH=. python scripts/pipeline_cli.py sector_scores --date "$END"
+          PYTHONPATH=. python scripts/pipeline_cli.py algos --date "$END"
+      - name: API contract and regression tests
+        run: PYTHONPATH=. pytest tests/test_api_v5.py -q
 
   frontend:
     name: frontend build and lib tests

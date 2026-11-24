@@ -459,6 +459,19 @@ async def run_catch_up_in_background(*, delay_sec: float | None = None) -> None:
     await asyncio.sleep(config.CATCH_UP_DELAY_SEC if delay_sec is None else delay_sec)
     try:
         summary = await run_catch_up()
+        # 数据补齐后恢复盘后串行链路：进程错过 16:20/17:00 时，罗盘与推送在这里续跑。
+        # 数据未就绪时链路只返回 blocked，不告警，避免服务刚启动就误报。
+        try:
+            from app.daily_chain import run_daily_chain
+
+            chain = await run_daily_chain(run_data=False, reason="catch_up")
+            if chain.get("status") not in {"skipped", "blocked"}:
+                summary["daily_chain"] = {
+                    key: chain.get(key)
+                    for key in ("status", "trade_date", "failed_stage", "error")
+                }
+        except Exception:                               # noqa: BLE001
+            logger.exception("补跑后链路恢复失败（不阻断服务）")
         logger.info("启动补跑结束：%s", summary)
     except asyncio.CancelledError:
         raise

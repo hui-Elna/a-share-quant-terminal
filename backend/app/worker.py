@@ -2,15 +2,19 @@
 定时任务（方案 A8 / F2）
 ========================
 单进程 APScheduler + 数据库 advisory lock：
-  - 15:36 盘后流水线（真实交易日历判断，节假日不跑）
-  - 16:30 选股（等评分与日报就绪）
-  - 17:10 信号前瞻统计（依赖 16:30 选股结果）
+  - 15:36 盘后串行链路（数据 → 仓位罗盘 → 机器人推送；真实交易日判断）
+  - 15:05–23:35 每 30 分钟巡检链路，按额度补采数据并续跑罗盘/推送
+  - 16:10 起每 2 小时数据库备份（当天已成功则跳过）
+  - 17:10 信号前瞻统计（依赖当日选股结果）
   - 17:30 纸面组合（水位 + 60 日重叠窗口，每周全量校准；非交易日跳过）
   - 02:00 历史补齐（断点续传，夜间执行）
   - 每 N 分钟新闻采集（作为情绪因子输入）
 
 **为什么不用 Celery**：方案 F2 明确"先单进程 + DB 锁，量大再上队列"。
 `pg_try_advisory_lock` 保证多 worker 部署时同一时刻只有一个实例在跑，定时任务因此幂等。
+
+**进程不常驻时**：固定时点只作为机会触发；服务启动后由 `catch_up` 补齐数据并
+恢复未完成的罗盘/推送环节，盘后巡检继续重试，因此不依赖进程恰好 16:20/17:00 在线。
 """
 from __future__ import annotations
 
@@ -64,19 +68,71 @@ async def _with_lock(name: str, job) -> None:
 
 
 async def run_daily_pipeline_job(db) -> None:
-    """盘后全链路。仅在真实交易日执行（修 #17：不再用 weekday 判断）。"""
+    """盘后串行链路。仅在真实交易日执行（修 #17：不再用 weekday 判断）。"""
+    from app.daily_chain import run_daily_chain
     from app.ingest.calendar import is_trade_day
-    from app.pipeline import run_daily_pipeline
 
     today = date.today()
     if not await is_trade_day(db, today):
-        logger.info("%s 非交易日，跳过盘后流水线", today)
+        logger.info("%s 非交易日，跳过盘后链路", today)
         return
 
-    result = await run_daily_pipeline(today, db)
-    failed = [k for k, v in result["steps"].items()
-              if isinstance(v, dict) and v.get("status") == "failed"]
-    logger.info("盘后流水线结束 steps=%d failed=%s", len(result["steps"]), failed)
+    result = await run_daily_chain(db, today, run_data=True, reason="scheduler")
+    stages = result.get("stages") or {}
+    logger.info(
+        "盘后链路结束 status=%s stages=%s failed_stage=%s",
+        result.get("status"), list(stages), result.get("failed_stage"),
+    )
+
+
+async def run_daily_chain_watchdog_job(db) -> None:
+    """盘后巡检：数据未完成且当日还有重采额度时补采；否则续跑罗盘/推送。"""
+    from app.daily_chain import (
+        data_readiness,
+        resolve_chain_date,
+        run_daily_chain,
+        should_retry_data,
+    )
+    from app.pipeline import advisory_unlock, try_advisory_lock
+
+    # 数据流水线仍在跑时不要抢跑，也不要因"数据未就绪"误告警。
+    try:
+        pipeline_free = await try_advisory_lock(db, "gfna:daily_pipeline")
+    except Exception:  # noqa: BLE001 - 巡检失败不影响下一轮
+        logger.exception("巡检获取数据流水线锁失败")
+        return
+    if not pipeline_free:
+        logger.info("盘后数据流水线运行中，巡检暂缓")
+        return
+    try:
+        await advisory_unlock(db, "gfna:daily_pipeline")
+    except Exception:  # noqa: BLE001
+        logger.warning("巡检释放数据流水线锁失败", exc_info=True)
+
+    target = None
+    retry_data = False
+    try:
+        target = await resolve_chain_date(db)
+        if target is not None:
+            ready, _detail = await data_readiness(db, target)
+            if not ready:
+                retry_data = await should_retry_data(db, target)
+    except Exception:  # noqa: BLE001 - 巡检判断失败时退回普通续跑
+        logger.exception("巡检判断数据状态失败，按普通续跑处理")
+
+    result = await run_daily_chain(
+        db,
+        target,
+        run_data=retry_data,
+        reason="watchdog_retry" if retry_data else "watchdog",
+        notify_on_blocked=not retry_data,
+    )
+    if result.get("status") not in {"skipped", "blocked"}:
+        logger.info(
+            "盘后巡检推进 status=%s trade_date=%s stages=%s retry_data=%s",
+            result.get("status"), result.get("trade_date"),
+            list((result.get("stages") or {}).keys()), retry_data,
+        )
 
 
 async def run_observation_algos(db) -> list[dict]:
@@ -107,24 +163,8 @@ async def run_observation_algos(db) -> list[dict]:
     return results
 
 
-async def run_algo_job(db) -> None:
-    """跑当前启用策略（结果先落库，前端打开即热），成功后可选推送。"""
-    from app.pipeline import run_task
-
-    await run_task("algos", db=db)
-    await run_observation_algos(db)
-    try:
-        from app.notify.push import push_daily_results
-
-        result = await push_daily_results(db)
-        if result.get("error"):
-            logger.error("盘后推送未完成: %s", result["error"])
-    except Exception as exc:  # noqa: BLE001 - 推送失败不得影响选股任务
-        logger.error("盘后推送异常（已隔离）: %s", type(exc).__name__)
-
-
 async def run_signal_perf_job(db) -> None:
-    """重算最近 25 个交易日的信号前瞻收益（依赖 16:30 选股结果）。"""
+    """重算最近 25 个交易日的信号前瞻收益（依赖当日选股结果）。"""
     from app.ingest.calendar import latest_trade_date
     from app.pipeline import run_task
 
@@ -190,38 +230,33 @@ async def run_backfill_job(db) -> None:
     await run_task("backfill", db=db)
 
 
-async def run_etf_sync_job(db) -> None:
-    """16:10 同步 ETF 日行情与板块映射，供 16:20 决策卡使用。"""
-    from app.compass.etf_sync import sync_etf_data
-    from app.ingest.calendar import is_trade_day
+async def run_backup_job(db) -> None:
+    """每日首次巡检时备份数据库；失败发告警但不影响其它任务。"""
+    import asyncio
 
-    today = date.today()
-    if not await is_trade_day(db, today):
-        logger.info("%s 非交易日，跳过 ETF 同步", today)
+    from app.services.backup import backup_database, backup_due
+
+    if not backup_due():
         return
-    try:
-        result = await sync_etf_data(db, today, mode="auto")
-        logger.info("ETF 同步结束 status=%s mapped=%s coverage=%s",
-                    result.get("status"), result.get("mapped"), result.get("coverage"))
-    except Exception as exc:  # noqa: BLE001 - ETF 同步失败不阻断其他任务
-        logger.error("ETF 同步失败: %s", type(exc).__name__)
-
-
-async def run_compass_card_job(db) -> None:
-    """16:20 生成仓位罗盘决策卡。数据未就绪时记录错误，不生成半成品。"""
-    from app.compass.service import generate_card
-    from app.ingest.calendar import is_trade_day
-
-    today = date.today()
-    if not await is_trade_day(db, today):
-        logger.info("%s 非交易日，跳过仓位罗盘卡片", today)
+    result = await asyncio.to_thread(backup_database, reason="scheduler")
+    if result["status"] == "success":
+        logger.info(
+            "数据库备份完成 file=%s bytes=%s", result.get("path"), result.get("bytes")
+        )
         return
+    if result["status"] == "skipped":
+        logger.info("数据库备份跳过：%s", result.get("reason"))
+        return
+    logger.error("数据库备份失败：%s", result.get("error"))
     try:
-        card = await generate_card(db, today)
-        logger.info("仓位罗盘卡片完成 date=%s card_id=%s exec_cap=%s",
-                    today, card.card_id, card.exec_cap)
-    except Exception as exc:  # noqa: BLE001 - 数据未就绪不阻断其他任务
-        logger.error("仓位罗盘卡片生成失败 date=%s: %s", today, type(exc).__name__)
+        from app.notify.alerts import send_chain_alert
+
+        await send_chain_alert(
+            db, date.today(), "backup",
+            f"数据库备份失败：{result.get('error')}",
+        )
+    except Exception:                                  # noqa: BLE001
+        logger.exception("数据库备份告警发送失败")
 
 
 async def run_compass_paper_backfill_job(db) -> None:
@@ -241,34 +276,6 @@ async def run_compass_paper_backfill_job(db) -> None:
         logger.error("罗盘复盘回填失败: %s", type(exc).__name__)
 
 
-async def run_compass_push_job(db) -> None:
-    """17:00 推送当日仓位罗盘卡片；无卡片或已推送时跳过。"""
-    from sqlalchemy import select
-
-    from app.compass.push import send_card_push
-    from app.db.models import FactDecisionCard
-    from app.ingest.calendar import is_trade_day
-
-    today = date.today()
-    if not await is_trade_day(db, today):
-        logger.info("%s 非交易日，跳过仓位罗盘推送", today)
-        return
-    card = (await db.execute(
-        select(FactDecisionCard)
-        .where(FactDecisionCard.trade_date == today)
-        .order_by(FactDecisionCard.generated_at.desc())
-        .limit(1)
-    )).scalar_one_or_none()
-    if card is None:
-        logger.warning("仓位罗盘推送跳过：%s 无决策卡", today)
-        return
-    try:
-        result = await send_card_push(db, card.card_id)
-        logger.info("仓位罗盘推送结束 card_id=%s status=%s", card.card_id, result.get("status"))
-    except Exception as exc:  # noqa: BLE001 - 推送失败不影响页面
-        logger.error("仓位罗盘推送失败 card_id=%s: %s", card.card_id, type(exc).__name__)
-
-
 # ============================================================
 # 调度器
 # ============================================================
@@ -284,24 +291,18 @@ def start_scheduler() -> AsyncIOScheduler:
     # 早于该时刻跑会让 snapshot/sector/moneyflow 全部被跳过（见 ingest/base 的 before_close_ready_time）
     scheduler.add_job(_with_lock, CronTrigger(hour=15, minute=36, timezone=_TZ),
                       args=["daily_pipeline", run_daily_pipeline_job],
-                      id="daily_pipeline", name="盘后流水线", replace_existing=True,
+                      id="daily_pipeline", name="盘后串行链路", replace_existing=True,
                       misfire_grace_time=_DAY_GRACE_SEC)
-    scheduler.add_job(_with_lock, CronTrigger(hour=16, minute=30, timezone=_TZ),
-                      args=["algos", run_algo_job],
-                      id="algos", name="策略选股", replace_existing=True,
-                      misfire_grace_time=_DAY_GRACE_SEC)
-    scheduler.add_job(_with_lock, CronTrigger(hour=16, minute=10, timezone=_TZ),
-                      args=["etf_sync", run_etf_sync_job],
-                      id="etf_sync", name="ETF 同步与映射", replace_existing=True,
-                      misfire_grace_time=_DAY_GRACE_SEC)
-    scheduler.add_job(_with_lock, CronTrigger(hour=16, minute=20, timezone=_TZ),
-                      args=["compass_card", run_compass_card_job],
-                      id="compass_card", name="仓位罗盘卡片", replace_existing=True,
-                      misfire_grace_time=_DAY_GRACE_SEC)
-    scheduler.add_job(_with_lock, CronTrigger(hour=17, minute=0, timezone=_TZ),
-                      args=["compass_push", run_compass_push_job],
-                      id="compass_push", name="仓位罗盘推送", replace_existing=True,
-                      misfire_grace_time=_DAY_GRACE_SEC)
+    # 盘后巡检：固定时点只作机会触发；进程晚启动/中途失败时由巡检续跑罗盘与推送
+    scheduler.add_job(_with_lock, CronTrigger(hour="15-23", minute="5,35", timezone=_TZ),
+                      args=["daily_chain_watchdog", run_daily_chain_watchdog_job],
+                      id="daily_chain_watchdog", name="盘后链路巡检",
+                      replace_existing=True, misfire_grace_time=_NIGHT_GRACE_SEC)
+    # 每天 16:10 起每 2 小时检查一次；当天已有成功备份则空转，失败会在下个时点重试
+    scheduler.add_job(_with_lock, CronTrigger(hour="16-23", minute="10", timezone=_TZ),
+                      args=["backup", run_backup_job],
+                      id="backup", name="数据库备份", replace_existing=True,
+                      misfire_grace_time=_NIGHT_GRACE_SEC)
     scheduler.add_job(_with_lock, CronTrigger(hour=17, minute=10, timezone=_TZ),
                       args=["signal_perf", run_signal_perf_job],
                       id="signal_perf", name="信号前瞻统计", replace_existing=True,
@@ -333,8 +334,9 @@ def start_scheduler() -> AsyncIOScheduler:
                       id="news_crawl", name="新闻采集", replace_existing=True)
 
     scheduler.start()
-    logger.info("定时任务已启动：15:36 盘后 / 16:10 ETF 同步 / 16:20 仓位罗盘"
-                " / 16:30 选股 / 17:00 罗盘推送 / 17:10 信号统计 / 17:30 纸面"
+    logger.info("定时任务已启动：15:36 盘后串行链路（数据→罗盘→推送）"
+                " / 盘后每 30 分钟巡检 / 16:10 起每 2 小时数据库备份"
+                " / 17:10 信号统计 / 17:30 纸面"
                 " / 17:40 罗盘复盘回填 / 周日 11:30 板块成分 / 周日 12:00 资金流"
                 " / 02:00 补齐 / 每 %d 分钟新闻", CRAWL_INTERVAL_MINUTES)
     return scheduler
@@ -362,8 +364,8 @@ def job_status() -> list[dict]:
 
 
 __all__ = ["start_scheduler", "stop_scheduler", "job_status",
-           "run_daily_pipeline_job", "run_algo_job", "run_signal_perf_job",
+           "run_daily_pipeline_job", "run_daily_chain_watchdog_job",
+           "run_observation_algos", "run_signal_perf_job",
            "run_paper_job", "run_news_crawl_job", "run_backfill_job",
            "run_sector_members_job", "run_moneyflow_job",
-           "run_compass_card_job", "run_compass_push_job",
-           "run_compass_paper_backfill_job", "run_etf_sync_job"]
+           "run_backup_job", "run_compass_paper_backfill_job"]

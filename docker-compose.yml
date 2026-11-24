@@ -62,6 +62,8 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_JSON: ${LOG_JSON:-0}
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      # 备份目录挂载到宿主机 ./backups，避免随容器/卷一起丢失
+      BACKUP_DIR: /app/backups
       # 空库首次启动自动灌演示数据（否则打开页面是空看板）。
       # 想直接用真实数据请置 0，然后执行：
       #   docker compose exec backend python scripts/pipeline_cli.py all
@@ -77,6 +79,9 @@ services:
     ports:
       # 只绑 127.0.0.1：后端 API 不对局域网暴露，前端 Nginx 在容器网络内直连（P1-3）
       - "127.0.0.1:8000:8000"
+    volumes:
+      # 备份必须落在宿主机目录：删除容器/数据卷时仍可恢复
+      - ./backups:/app/backups
     depends_on:
       postgres:
         condition: service_healthy

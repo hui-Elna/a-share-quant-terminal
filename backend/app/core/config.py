@@ -261,6 +261,8 @@ CATCH_UP_MAX_DAYS = _env_int("CATCH_UP_MAX_DAYS", 5)
 # 每次启动回看最近 N 个开市日的行数，识别被后续完整日掩盖的残缺日
 CATCH_UP_SCAN_DAYS = _env_int("CATCH_UP_SCAN_DAYS", 5)
 CATCH_UP_DELAY_SEC = _env_float("CATCH_UP_DELAY_SEC", 15.0)
+# 盘后链路：数据阶段失败后额外重采次数（0=不重采；默认 1 次）
+DAILY_CHAIN_MAX_DATA_RETRIES = _env_int("DAILY_CHAIN_MAX_DATA_RETRIES", 1)
 
 # ==================== 盘后推送 ====================
 PUSH_ENABLED = _env_bool("PUSH_ENABLED", False)
@@ -278,7 +280,6 @@ OBSERVATION_ALGOS = tuple(
     item.strip() for item in _env("OBSERVATION_ALGOS", "").split(",") if item.strip()
 )
 PUSH_OBSERVATION = _env_bool("PUSH_OBSERVATION", False)
-PUSH_WATCHLIST_ONLY = _env_bool("PUSH_WATCHLIST_ONLY", False)
 
 # 允许的 CORS 来源（默认放开给本地开发；生产用环境变量收紧）
 CORS_ORIGINS = [
@@ -290,5 +291,6 @@ __all__ = [
     "STRATEGY_DEFAULTS", "BACKEND_DIR", "PROJECT_DIR",
     "PUSH_ENABLED", "PUSH_CHANNEL", "WECOM_WEBHOOK_URL", "PUSH_ALGOS",
     "PUSH_TOP_N", "PUSH_MODE", "PUSH_DRY_RUN", "PUSH_FRONTEND_URL",
-    "OBSERVATION_ALGOS", "PUSH_OBSERVATION", "PUSH_WATCHLIST_ONLY",
+    "OBSERVATION_ALGOS", "PUSH_OBSERVATION",
+    "DAILY_CHAIN_MAX_DATA_RETRIES",
 ]
