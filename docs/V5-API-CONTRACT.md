@@ -81,7 +81,7 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
 > 形状说明（**两种并存，均已生效**）：
 > - `/api/v1/meta/freshness` 返回 `{items: Freshness[], network_enabled, snapshot_ready_after}`（包裹对象）；
 > - 内嵌为**数组**：`market/dashboard`、`market/temperature`、`market/sector/{code}`、`stocks/{code}`；
-> - 内嵌为**单个对象或 `null`**：`algo/ladder`、`algo/consensus`、`algo/hits`。
+> - 内嵌为**单个对象或 `null`**：`algo/ladder`、`algo/consensus`。
 >
 > 前端必须两种形态都兼容（`FreshnessBadge` 与本仓的归一化逻辑已覆盖），不得假设所有 `freshness` 都是数组。
 
@@ -566,75 +566,6 @@ T+1 停牌/一字板（`fillable=false`）排除出胜率与均值。
 - `best_rank` 为各命中策略名次的最小值（`null` 名次不参与）。
 - 单条 SQL 完成；同一策略当日多次 run 的去重与跨策略计数均不产生 N×策略查询。
 
-### 5.6 POST `/api/v1/algo/hits`（V6 T8）
-
-自选股站内提醒：按提交的代码列表查询近 N 个交易日的策略命中。**只读查询，语义上等价 GET**；用 POST 是因为 codes 列表可能很长。
-
-请求体：
-
-```json
-{ "codes": ["000739", "000560"], "days": 10 }
-```
-
-- `codes`：1–6 位数字串数组；服务端去重保序；去重后最多 100 个，超出 422（`INVALID_PARAM`）；
-  任一元素非法（含空格、负号、7 位、SQL 片段等）直接 422，不静默丢弃。
-- `days`：1–60，默认 10；越界由 FastAPI 参数校验返回 422。
-- 窗口以**最近一个非回测成功 run 的交易日**为锚点回溯 N 个开市日（不取 `CURRENT_DATE`），
-  数据未更新时仍能返回最近的可用信号。
-- 统计口径：当前启用策略（`SPECS`）且 `status='success'`、`is_backtest IS FALSE` 的 run；
-  **回测 run 永不参与**。单条 SQL（`stg_signal ⋈ stg_run` + `code = ANY(:codes)`），
-  不会按票循环；所有值均参数绑定，无字符串拼接。
-- 每条信号按 `(algo_code, trade_date, code)` 去重，只保留名次最优的一条 run。
-
-响应：
-
-```json
-{ "items": [
-    { "code": "000739", "name": "普洛药业", "algo_code": "b2", "algo_name": "RSI6 超卖回归",
-      "signal_date": "2026-10-26", "rank": 2, "hit_id": "b2:2026-10-26" },
-    { "code": "000560", "name": "我爱我家", "algo_code": "b3", "algo_name": "KDJ 低位金叉",
-      "signal_date": "2026-10-26", "rank": 1, "hit_id": "b3:2026-10-26" }
-  ],
-  "latest_signal_date": "2026-10-26",
-  "freshness": { "dataset": "algo_run", "status": "ok", "...": "契约 0.4" },
-  "days": 10,
-  "total": 2, "has_more": false, "page": 1, "page_size": 2 }
-```
-
-- `hit_id = algo_code:signal_date` 是提醒去重键：同一策略同一天命中多只自选股只算**一条**新提醒；
-  已读 `hit_id` 由前端写入 5.7 的服务端状态（localStorage 仅作缓存），导航栏只显示未读数量（>9 显示 `9+`）。
-- `rank` 可能为 `null`；`latest_signal_date` 为 `items` 中最大日期，无命中时为 `null`。
-- C1 分页：命中明细一次全量返回（自选代码上限 100 控制规模），`total = page_size = items.length`、
-  `has_more=false`、`page=1`；这些字段只用于统一渲染，**不存在**按页遗漏的命中。
-- `items` 排序：`signal_date DESC` → `algo_code ASC` → `rank ASC NULLS LAST` → `code ASC`。
-
-### 5.7 GET/PUT `/api/v1/watchlist`（V6 T8）
-
-无账号体系下的**单租户**自选状态，固定一行 `app_watchlist_state(id=1)`；localStorage 只是本机缓存。
-
-GET 响应：
-
-```json
-{ "codes": ["000560", "000739"], "seen_hits": ["b2:2026-10-26"],
-  "updated_at": "2026-10-31T14:44:14.376683+00:00" }
-```
-
-PUT 请求体（两个字段均可选，只传一个时另一个保持不变）：
-
-```json
-{ "codes": ["000739"], "seen_hits": ["b2:2026-10-26"] }
-```
-
-- `codes`：校验与 5.6 一致（1–6 位数字串、去重保序、≤100），非法 422 `INVALID_PARAM`。
-- `seen_hits`：每项 `algo_code:YYYY-MM-DD`（真实日历日期），去重、≤500，非法 422 `INVALID_PARAM`。
-- 无版本号，last-write-wins；响应始终返回完整状态，`updated_at` 每次写入刷新。
-- 前端启动时 GET 合并：本地有待同步改动则先推本地，否则以服务器为准、已读取并集，
-  服务器为空而本地非空时把本地名单迁到服务器。清空站点数据、隐私模式或换浏览器（同一后端）均可恢复。
-- 写入采用 400ms 防抖 + 失败标记 pending + 15 秒重试 + `online` 事件立即重试；失败不影响本机继续使用。
-- **部署边界（P1-3）**：本接口不提供 API 鉴权，依赖宿主机端口只绑定 `127.0.0.1`
-  （单机自用）。非本机请求不可达，因此没有 401 语义；跨设备访问需自行加 SSH 隧道、
-  Tailscale 或反向代理 Basic Auth，不能把 8000/5173 直接暴露到 `0.0.0.0`。
-
 ## 6. 回测（D4/D5）
 
 ### 6.1 POST `/api/v1/backtest/{algo_code}` — 创建异步回测任务（P2-4）
@@ -1095,10 +1026,10 @@ upsert `fact_paper_portfolio`。`review` 追加：
 | POST | `/api/v1/algo/preview` | 条件树只读预览；不写 `stg_run`、不进入共识 | 公开（限频） |
 | GET | `/api/v1/backtest/{algo_code}/oos?oos_id=` | 样本外 walk-forward 结果；缺省取最新一组 | 公开 |
 | POST | `/api/v1/backtest/{algo_code}/oos` | 创建样本外任务（后台逐折执行） | 公开 |
-| GET | `/api/v1/watchlist` | 读取自选状态（单租户） | 公开 |
-| PUT | `/api/v1/watchlist` | 覆盖自选状态 | 公开 |
 | GET | `/api/v1/meta/provider-health?days=` | 数据源 × 任务成功率、降级次数与最近错误 | 公开 |
 | POST | `/api/v1/admin/catch-up` | 手动检查并补跑最近缺失交易日 | `X-Admin-Key` |
+| POST | `/api/v1/admin/daily-chain` | 手动推进「数据 → 仓位罗盘 → 推送」串行链路；`run_data=true` 时先跑采集 | `X-Admin-Key` |
+| POST | `/api/v1/admin/backup` | 立即执行数据库备份，返回文件路径、大小、校验和与清理结果 | `X-Admin-Key` |
 | POST | `/api/v1/crawl/auto` | 启动/配置自动新闻采集 | 公开 |
 | GET | `/api/v1/crawl/auto/status` | 自动采集状态 | 公开 |
 | POST | `/api/v1/crawl/trigger` | 手动触发新闻爬虫 | 公开 |

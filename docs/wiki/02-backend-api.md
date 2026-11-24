@@ -117,11 +117,11 @@ app = FastAPI(
 | `SCHEDULER_ENABLED` | `1` | CI/测试置 0 |
 | `AUTO_CREATE_TABLES` | `1` | 启动兜底建表 |
 | `CATCH_UP_ENABLED` / `CATCH_UP_MAX_DAYS` / `CATCH_UP_SCAN_DAYS` | `1` / `5` / `5` | 启动补缺 |
+| `DAILY_CHAIN_MAX_DATA_RETRIES` | `1` | 数据阶段失败后的额外重采次数 |
 | `ADMIN_API_KEY` | 空 | 空时管理接口仅本机可访问 |
 | `CORS_ORIGINS` | `*` | |
 | `PUSH_*` / `WECOM_WEBHOOK_URL` | 关闭 | 企业微信推送 |
 | `OBSERVATION_ALGOS` / `PUSH_OBSERVATION` | 空 / `0` | 观察候选策略 |
-| `PUSH_WATCHLIST_ONLY` | `0` | 1 = 只推送自选命中；0 = 推送全部并标注 `[自选]` |
 | `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` / `LLM_ENABLED` | 空 / `deepseek-chat` / 有 key 即开 | AI 日报 |
 
 ---
@@ -190,7 +190,6 @@ api_router.include_router(backtest.router)
 api_router.include_router(paper.router)
 api_router.include_router(meta.router)
 api_router.include_router(admin.router)
-api_router.include_router(watchlist.router)
 api_router.include_router(compass.router)
 ```
 
@@ -259,7 +258,6 @@ api_router.include_router(compass.router)
 | GET | `/api/v1/algo/consensus` | 多策略共识榜 |
 | GET | `/api/v1/algo/fields` | 条件树字段/算子/逻辑清单 |
 | POST | `/api/v1/algo/preview` | 条件树只读预览（20s 超时、10 次/分钟） |
-| POST | `/api/v1/algo/hits` | 自选股近 N 日命中 |
 | GET | `/api/v1/algo/{algo_code}` | 执行/读取策略结果 |
 | POST | `/api/v1/algo/{algo_code}/refresh` | 忽略缓存重跑 |
 | GET | `/api/v1/algo/{algo_code}/runs` | 历史 run 列表 |
@@ -280,15 +278,13 @@ api_router.include_router(compass.router)
 | POST | `/api/v1/backtest/{algo_code}/oos` | 创建样本外 walk-forward（后台逐折执行） |
 | GET | `/api/v1/backtest/{algo_code}/oos?oos_id=` | 读取样本外结果（缺省最新一组） |
 
-#### 纸面 / 自选 / 元信息 / 管理
+#### 纸面 / 元信息 / 管理
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/v1/paper/portfolios` | 组合列表 |
 | GET | `/api/v1/paper/portfolio/{algo_code}` | 净值/持仓/待执行 |
 | POST | `/api/v1/paper/portfolio/{algo_code}/sync` | 手动重算（后台） |
-| GET | `/api/v1/watchlist` | 自选状态 |
-| PUT | `/api/v1/watchlist` | 整份覆盖（字段可选） |
 | GET | `/api/v1/meta/freshness` | 所有数据集新鲜度 |
 | GET | `/api/v1/meta/provider-health` | 数据源 × 任务成功率/降级次数（days=1–30） |
 | GET | `/api/v1/meta/trade-calendar` | 交易日历 |
@@ -296,6 +292,8 @@ api_router.include_router(compass.router)
 | GET | `/api/v1/meta/partitions` | `fact_stock_daily` 分区概览 |
 | POST | `/api/v1/admin/ingest/{task}` | 手动触发任务（需管理员） |
 | POST | `/api/v1/admin/catch-up` | 检查并补跑缺失交易日 |
+| POST | `/api/v1/admin/daily-chain` | 推进盘后串行链路（数据 → 罗盘 → 推送） |
+| POST | `/api/v1/admin/backup` | 立即执行数据库备份 |
 | POST | `/api/v1/admin/seed-demo` | 演示数据（仅 `ENV=demo`） |
 
 #### 仓位罗盘（V9）
@@ -336,11 +334,10 @@ api_router.include_router(compass.router)
 | 文件 | 行数 | 核心函数 | 说明 |
 |---|---:|---|---|
 | `market.py` | 974 | `get_dashboard`、`get_market_overview`、`get_index_compare`、`get_bull_bear_valuation`、`get_sector_detail` | 行情/板块/市场状态；大量私有查询函数 `_query_*` |
-| `algo.py` | 422 | `get_algo_list`、`get_algo_ladder`、`get_algo_consensus`、`get_algo_result`、`refresh_algo`、`export_algo_csv` | 选股中心 |
+| `algo.py` | 386 | `get_algo_list`、`get_algo_ladder`、`get_algo_consensus`、`get_algo_result`、`refresh_algo`、`export_algo_csv` | 选股中心 |
 | `backtest.py` | 738 | `create_backtest`、`create_backtest_grid`、`get_backtest`、`get_backtest_trades`、`export_backtest_csv`、OOS | 回测、矩阵与样本外 |
 | `stocks.py` | 377 | `search_stocks`、`get_sparkline_batch`、`get_stock_detail`、`get_kline`、`get_benchmark_series` | 个股 |
 | `paper.py` | 73 | `get_paper_portfolios`、`get_paper_portfolio`、`sync_paper_portfolio_api` | 纸面组合 |
-| `watchlist.py` | 50 | `get_watchlist_state`、`put_watchlist_state` | 单租户自选 |
 | `meta.py` | 149 | `get_freshness`、`get_trade_calendar`、`list_jobs`、`get_partitions`、`get_provider_health` | 元信息 |
 | `admin.py` | 100 | `trigger_ingest`、`trigger_catch_up`、`seed_demo` | 管理 |
 | `articles.py` | 382 | `list_articles`、`get_article_detail`、`search_articles`、`get_stats`、爬虫触发 | 新闻 |

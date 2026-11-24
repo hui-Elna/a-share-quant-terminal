@@ -44,9 +44,8 @@
 | 新闻 | `news_articles` | `id` | 新闻文章（`url_hash` 唯一） |
 | 新闻 | `crawl_logs` | `id` | 爬虫运行日志 |
 | 推送 | `push_log` | `id` | 推送幂等日志 |
-| 状态 | `app_watchlist_state` | `id=1` | 单租户自选与已读水位 |
 
-共 34 张业务表 + 2 个视图。
+共 33 张业务表 + 2 个视图。
 
 ---
 
@@ -327,15 +326,7 @@
 
 种子表；实际策略清单以来 `strategy/strategies.py` 的 `SPECS` / `CANDIDATE_SPECS` 为准。
 
-### 5.5 `app_watchlist_state`
-
-[`models/state.py` L21-L39](../../backend/app/db/models/state.py#L21-L39)
-
-- 单行 `id=1`（CheckConstraint）；
-- `codes` JSONB（≤100）、`seen_hits` JSONB（≤500）；
-- 单租户设计，所有浏览器共享；localStorage 只是缓存。
-
-### 5.6 `push_log`
+### 5.5 `push_log`
 
 [`models/push.py`](../../backend/app/db/models/push.py)
 
@@ -369,7 +360,7 @@
 
 ## 8. 迁移（Alembic）
 
-目录：`backend/alembic/versions/`，共 14 个版本：
+目录：`backend/alembic/versions/`，共 19 个版本：
 
 | 版本 | 内容 |
 |---|---|
@@ -378,7 +369,7 @@
 | `20261029_0003_sector_metrics.py` | 板块聚合指标 |
 | `20261029_0004_sector_member_partial.py` | 成分 `is_partial` |
 | `20261030_0005_signal_perf.py` | 信号前瞻 |
-| `20261031_0006_watchlist_state.py` | 自选状态 |
+| `20261031_0006_legacy_state.py` | 历史状态表占位（revision 保留，建表已移除） |
 | `20261101_0007_backtest_grid.py` | 参数矩阵 |
 | `20261101_0008_paper_portfolio.py` | 纸面组合 |
 | `20261108_0009_backtest_grid_table.py` | 矩阵表重构 |
@@ -388,6 +379,7 @@
 | `20261112_0012_market_factor_ohlc.py` | 市场因子 OHLC |
 | `20261115_0013_signal_score_precision.py` | 分数精度 |
 | `20261115_0014_push_log.py` | 推送日志 |
+| `20261123_0019_drop_legacy_state.py` | 删除历史状态表 `app_watchlist_state` |
 
 约定：
 

@@ -311,4 +311,5 @@ README 记录的实测结论（2026-11）：
 - **频率**：`sector_members` 改为每周；全市场 `moneyflow` 改为每周；每日资金流由板块快照提供。
 - **估值**：`collect_latest_valuation` 在同日价格/财报/分红未变时返回 `skipped=already_collected`；`force=True` 可强制重算。
 - **估值单日快速路径**：批量取数 + 向量化计算 + 一次批量 UPDATE；实测 5216 只约 2.76s，与慢路径逐字段零差异。
+- **任务监控口径**：`sector_members` / `sector_daily` / `sector_snapshot` 覆盖率按目标池；`sector_pool` 的 coverage 是候选池 → 可交易池的可交易占比，低于 100% 不是缺失。
 - 配置见 `core/config.py` 的 V10 段；验收见 `docs/GFNA_V10_数据采集瘦身任务书.md`。

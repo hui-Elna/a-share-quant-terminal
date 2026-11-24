@@ -52,7 +52,6 @@ Vite 代理（[`vite.config.ts`](../../frontend/vite.config.ts)）：
 | `/ladder` | 重定向 | `/algo-center#ladder` |
 | `/paper` | `PaperPage` | 纸面组合净值/持仓/待执行 |
 | `/stocks/:code` | `StockDetailPage` | K 线 + 指标 + 因子雷达 + 所属板块 + 信号 |
-| `/watchlist` | `WatchlistPage` | 自选与信号提醒 |
 | `/jobs` | `JobsPage` | 数据新鲜度 + 任务监控 + 一键补数 |
 | `/about` | `AboutPage` | 说明与免责声明 |
 | `*` | `NotFoundPage` | 404 |
@@ -79,8 +78,7 @@ types/（后端契约 TS 类型）
 - `networkMode: 'always'`（断网时也真实发请求，由 client 报错，而不是挂起）；
 - `refetchOnWindowFocus: false`；
 - `staleTime: 5 分钟`；
-- `QueryCache/MutationCache.onError` 把异常记入 `statusFeed`（状态中心可追溯）；
-- 启动时 `hydrateWatchlist()` 从服务端拉取自选状态。
+- `QueryCache/MutationCache.onError` 把异常记入 `statusFeed`（状态中心可追溯）。
 
 ---
 
@@ -107,7 +105,6 @@ types/（后端契约 TS 类型）
 | 领涨/领跌 | `dashboard.top_sectors/bottom_sectors` |
 | AI 复盘 | `AIReport` 渲染 `daily_report` Markdown |
 | 市场状态 | `MarketOverview` → `/market/overview`（`RegimeCard`、`AllocationCard`、`ThermometerCard`） |
-| 自选提醒 | `WatchlistPanel`、`WatchButton` |
 
 ### 4.3 `IndexComparePage` — 指数对比
 
@@ -155,13 +152,12 @@ types/（后端契约 TS 类型）
 - `KlineChart`（懒加载 lightweight-charts）：蜡烛图 + MA/BOLL + 成交量 + 回测买卖标记；
 - 指标卡：RSI/MACD/ATR/波动率/量比/动量；
 - `AlgoRadarChart` 六维因子；
-- 所属板块、最近信号、自选按钮、新鲜度徽标。
+- 所属板块、最近信号、新鲜度徽标。
 
-### 4.7 `WatchlistPage` / `JobsPage` / `DetailPage` / `AboutPage`
+### 4.7 `JobsPage` / `DetailPage` / `AboutPage`
 
 | 页面 | 要点 |
 |---|---|
-| `WatchlistPage` | 进入即把命中 `hit_id` 写入已读水位；60 秒轮询，后台标签页停止 |
 | `JobsPage` | 数据集新鲜度总览 + 任务表 + 30 秒自动刷新（可暂停）+ 一键补数（`triggerCatchUp`） |
 | `DetailPage` | 新闻正文、AI 摘要、来源与时间 |
 | `AboutPage` | 系统说明、数据边界、免责声明 |
@@ -174,11 +170,10 @@ types/（后端契约 TS 类型）
 |---|---|---|
 | `api/client.ts` | 通用 | `request`、`buildUrl`、`buildQueryString`、`downloadCsv`、`extractList`、`extractListPage`、`ApiError` |
 | `api/market.ts` | `/market/*` | `fetchDashboard`、`fetchIndexSeries`、`fetchSectors`、`fetchSectorDetail`、`fetchMarketOverview`、`fetchIndexCompare`、`fetchBullBearValuation` |
-| `api/algo.ts` | `/algo/*` | `fetchAlgoList`、`fetchAlgoResult`、`refreshAlgoResult`、`fetchAlgoRuns`、`fetchAlgoRunDetail`、`fetchLadder`、`fetchConsensus`、`fetchWatchHits`、`downloadAlgoCsv` |
+| `api/algo.ts` | `/algo/*` | `fetchAlgoList`、`fetchAlgoResult`、`refreshAlgoResult`、`fetchAlgoRuns`、`fetchAlgoRunDetail`、`fetchLadder`、`fetchConsensus`、`downloadAlgoCsv` |
 | `api/backtest.ts` | `/backtest/*` | `runBacktest`、`fetchBacktestStatus/Result`、`fetchBacktestTrades`、`downloadBacktestCsv`、`createBacktestGrid`、`fetchBacktestGrid`、`retryBacktestGrid` |
 | `api/stock.ts` | `/stocks/*` | `fetchStock`、`fetchKline`、`searchStocks`、`fetchSparklineBatch`、`fetchBenchmark` |
 | `api/paper.ts` | `/paper/*` | `fetchPaperPortfolios`、`fetchPaperDetail`、`syncPaperPortfolio` |
-| `api/watchlist.ts` | `/watchlist` | `fetchWatchlistState`、`saveWatchlistState` |
 | `api/meta.ts` | `/meta/*`、`/health`、`/admin/catch-up` | `fetchFreshness`、`fetchTradeCalendar`、`fetchJobs`、`fetchHealth`、`triggerCatchUp` |
 | `api/news.ts` | `/articles`、`/search`、`/stats/*`、`/crawl/*` | 新闻列表/详情/搜索/统计/抓取 |
 
@@ -208,7 +203,6 @@ types/（后端契约 TS 类型）
 | `useBacktest*` | 回测/矩阵 | 1.5s 轮询，10 分钟上限；矩阵 3s 轮询，完成后停 |
 | `usePaperPortfolios/Detail` | 纸面组合 | 同步中 3s；隐藏标签页停止 |
 | `useStock/useKline/useSparklineBatch` | 个股 | 5 分钟；批量 sparkline 一次请求 |
-| `useWatchSignals` / `useWatchBadge` | 自选命中 | 60s；仅标签页可见时轮询 |
 | `useArticles/useSearch/useAutoCrawl` | 新闻 | 翻页保留旧数据；自动抓取 10 分钟节流 |
 | `useFreshness` / `useJobs` | 元信息 | 任务页自动刷新 |
 | `useDelayedFlag` | 骨架屏延迟 | 避免闪屏 |
@@ -220,7 +214,7 @@ types/（后端契约 TS 类型）
 | 组件 | 用途 | 关键点 |
 |---|---|---|
 | `Layout` | 全局骨架 | Navbar + Outlet + Footer + 命令面板 + 状态中心 |
-| `Navbar` | 导航 | 搜索、主题切换、自选红点、状态中心 |
+| `Navbar` | 导航 | 搜索、主题切换、状态中心 |
 | `CommandPalette` | Ctrl/Cmd+K | 股票（250ms debounce）/页面/策略；自研，无 cmdk |
 | `FreshnessBadge` | 数据新鲜度 | 消费 `/meta/freshness` |
 | `DataTable` | 通用表格 | 排序、展开、分页、粘性表头 |
@@ -241,7 +235,6 @@ types/（后端契约 TS 类型）
 | `IndexCard` | 指数卡 | 多周期收益、sparkline、排名 |
 | `MarketOverview` | 市场概览 | 组合上述状态组件 |
 | `AIReport` / `Markdown` | AI 日报 | Markdown 渲染 |
-| `WatchlistPanel` / `WatchButton` | 自选 | 单租户共享状态 |
 | `StateViews` | 空/错/骨架 | 统一页面状态 |
 | `StatusCenter` | 状态中心 | sessionStorage 流水，30 秒去重 |
 | `AmbientBackdrop` / `IntroCurtain` | 视觉氛围 | 尊重 reduced motion |
@@ -264,19 +257,10 @@ types/（后端契约 TS 类型）
 | `lib/algoSession.ts` | 选股中心参数/日期/run/表格状态 + URL 序列化 |
 | `lib/backtestSession.ts` | 回测任务/矩阵状态持久化（跨刷新恢复） |
 | `lib/algoParams.ts` | 参数快照 diff、默认值处理 |
-| `lib/watchlist.ts` | 自选状态：服务端事实源 + localStorage 缓存 + 待同步标记 |
 | `lib/market.ts` | 市场相关小工具 |
 | `lib/utils.ts` | `cn` 等 |
 
-### 8.1 `watchlist.ts` 存储分层
-
-- 服务端 `app_watchlist_state(id=1)` 是事实源；
-- localStorage 键：`gfna-watchlist`、`gfna-watchlist-seen`、`gfna-watchlist-pending`；
-- 本地有未同步改动时优先推送，避免被旧服务端覆盖；
-- 隐私模式 localStorage 抛异常 → 降级内存态并标记 `storageBroken`；
-- 同一标签页与跨标签页通过事件同步。
-
-### 8.2 `algoSession.ts`
+### 8.1 `algoSession.ts`
 
 - 上下文键：`gfna:algo:context:v1:<algo>`；
 - 表格状态键：`gfna:algo:table:v1:<run_id>`；

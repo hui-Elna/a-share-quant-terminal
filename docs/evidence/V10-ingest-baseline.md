@@ -103,6 +103,30 @@ diff_count 0
 
 ---
 
+### 2.5 任务监控口径修正
+
+问题：旧 `sector_members` 的 `sector_list_incomplete` 以“历史已有成分板块”（479 个）为分母，目标池只有 53 个时误报 419 个缺失，任务监控显示“数量不够/质量异常”。
+
+修正：
+
+- `sector_list_incomplete` 只比较目标池内已有成分板块；历史非目标板块不计入缺失。
+- `sector_members` / `sector_daily` / `sector_snapshot` 的覆盖率按目标池计算。
+- `sector_pool` 的 coverage 在任务监控中显示为“可交易占比”，低于 100% 是 ETF 映射/流动性过滤，不判失败。
+- 行业成分源整体不可用时标记 `stale`，覆盖率写 `NULL`，不再用 0% 冒充“数量不够”。
+
+实测：
+
+| 项 | 修正前 | 修正后 |
+|---|---|---|
+| `sector_members` 状态 | `quality_failed` | `stale`（行业源不可用） |
+| 覆盖率 | 0.4186 | `NULL` |
+| 异常 | `sector_list_incomplete` 419 个缺失 | `industry_source_unavailable` / `no_sector_fetched` |
+| 监控文案 | “数量不够/419 个缺失” | “行业成分源不可用，本次未更新” |
+
+前端同步：`FreshnessBadge` 对板块类数据集显示“目标池覆盖”，对 `sector_pool` 显示“可交易占比”；`JobsPage` 增加口径说明。`npm run build` 通过，5 个前端纯函数测试全部通过。
+
+---
+
 ## 3. 边界与后续
 
 1. `sector_snapshot` 的实时网络调用未在本证据中执行；单元测试覆盖了过滤与 upsert 语义，实际网络行为应在 15:36 盘后流水线观察。

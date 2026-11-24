@@ -110,7 +110,6 @@ python scripts/pipeline_cli.py algos
 | `PUSH_ENABLED` / `WECOM_WEBHOOK_URL` | 0 / 空 | 企业微信推送 |
 | `PUSH_ALGOS` / `PUSH_TOP_N` / `PUSH_MODE` | 空 / 10 / always | 推送范围 |
 | `OBSERVATION_ALGOS` / `PUSH_OBSERVATION` | 空 / 0 | 观察候选 |
-| `PUSH_WATCHLIST_ONLY` | 0 | 1 = 只推自选命中；0 = 全部并标 `[自选]` |
 | `PAPER_ENABLED_ALGOS` | 空 = 全部 | 纸面组合 |
 | `CORS_ORIGINS` | `*` | 收紧生产来源 |
 | `LOG_LEVEL` / `LOG_JSON` | INFO / 0 | 日志 |
@@ -146,6 +145,22 @@ alembic upgrade head             # 等价的手动方式
 > `bootstrap_db.py` 的 `create_all` 只补“缺失的表”，不会给旧表补列。
 > 已有数据卷升级镜像后，必须执行增量迁移，否则会出现
 > `column ... does not exist` 导致接口 500（典型：`margin_trading.margin_buy_amount`）。
+
+### 4.1 备份与恢复
+
+```bash
+cd backend
+python scripts/backup_db.py                 # 手动备份到 BACKUP_DIR / /app/backups
+python scripts/restore_drill.py             # 快速演练：结构+数据，跳过索引/约束
+python scripts/restore_drill.py --full      # 完整恢复（耗时更长）
+```
+
+- compose 将宿主机 `./backups` 挂载到 `/app/backups`，容器/数据卷删除后备份仍在；
+- 备份格式 `pg_dump -Fc`，同时生成 `.sha256`；默认保留 7 份日备份 + 4 个自然周各一份；
+- `migrate_db.py` 在生产库升级前自动备份，失败则阻止迁移；
+  `*_test` / `*_demo` 跳过，紧急可用 `--skip-backup`；
+- 定时任务 16:10 起每 2 小时检查，当天没有成功备份才执行；
+- 恢复演练会自动创建并删除 `gfna_restore_drill`，不要在生产时段执行重恢复。
 
 ---
 
@@ -216,8 +231,9 @@ python scripts/pipeline_cli.py backtest a3 --start 2025-10-21 --end 2026-10-21
 
 | 时间 | 任务 | 说明 |
 |---|---|---|
-| 15:36 | 盘后流水线 | 真实交易日判断；节假日跳过 |
-| 16:30 | 策略选股 + 观察候选 + 推送 | 先 `algos`，再 `OBSERVATION_ALGOS`，最后推送 |
+| 15:36 | 盘后串行链路 | 数据采集与校验 → 仓位罗盘 → 机器人推送；前序失败即停止 |
+| 15:05–23:35 每 30 分钟 | 盘后链路巡检 | 数据失败且当日有额度时补采一次；否则续跑罗盘/推送 |
+| 16:10 起每 2 小时 | 数据库备份 | 当天无成功备份才执行；失败告警并在下个时点重试 |
 | 17:10 | 信号前瞻统计 | 重算最近 25 个交易日 |
 | 17:30 | 纸面组合 | 非交易日跳过；单组合失败隔离 |
 | 周日 11:30 | 板块成分周更 | `sector_members`，只处理目标池 |
@@ -225,7 +241,20 @@ python scripts/pipeline_cli.py backtest a3 --start 2025-10-21 --end 2026-10-21
 | 02:00 | 历史补齐 | `backfill`，断点续传 |
 | 每 N 分钟 | 新闻采集 | `CRAWL_INTERVAL_MINUTES`，默认 60 |
 
+盘后串行链路（[`backend/app/daily_chain.py`](../../backend/app/daily_chain.py)）：
+
+1. **data**：跑 `run_daily_pipeline` 后逐项校验 `meta_data_quality` 与当日启用策略的 `stg_run`；
+2. **compass**：ETF 同步（失败不阻断）→ 生成决策卡 → 校验卡片状态与执行仓位字段；
+3. **push**：观察候选 → 选股播报 → 罗盘卡片推送。
+
+服务未在 15:36 运行时，启动补跑完成后自动从失败/缺失环节续跑；巡检每 30 分钟重试。
+每次运行写 `ingest_job(task="daily_chain")`，任务监控页可见阶段状态。任一步失败会发送
+企业微信告警（同一交易日同一环节只成功告警一次），后续环节不会误触发。手动入口：
+`POST /api/v1/admin/daily-chain`。
+
 15:36 盘后流水线中的 `valuation` 会在同日价格/财报/分红未变时跳过（`skipped=already_collected`）；`catch_up` 复用同一保护，避免重复计算。
+
+任务监控口径：`sector_members` / `sector_daily` / `sector_snapshot` 的覆盖率按目标池计算，历史非目标板块不计入缺失；`sector_pool` 的 coverage 是“候选池 → 可交易池”的可交易占比，低于 100% 是 ETF 映射/流动性过滤，不判失败。
 
 并发安全：每个任务 `pg_try_advisory_lock("gfna:<name>")`；拿不到锁直接跳过。
 
@@ -329,7 +358,7 @@ cd backend
 PYTHONPATH=. pytest tests -q
 ```
 
-覆盖：指标已知值（Wilder RSI）、因子单调性、条件树、参数指纹、回测绩效、未来函数检测、API 契约、错误体、策略参数真生效、run 可复现、指数对比/牛熊估值、纸面组合、自选命中。
+覆盖：指标已知值（Wilder RSI）、因子单调性、条件树、参数指纹、回测绩效、未来函数检测、API 契约、错误体、策略参数真生效、run 可复现、指数对比/牛熊估值、纸面组合。
 
 ### 9.2 集成测试（需要真实库）
 
@@ -370,7 +399,7 @@ npm run test:sample
 | Job | 内容 |
 |---|---|
 | `backend` | `pytest tests -q`（无 DB，禁用调度） |
-| `backend-integration` | PostgreSQL 16 服务 + `alembic upgrade head` + `pytest tests/integration -q` |
+| `backend-integration` | PostgreSQL 16 + 迁移 + `tests/integration` + 演示数据全历史 + `tests/test_api_v5.py` |
 | `frontend` | `npm ci` → `npm run build` → treemap/sparkline/palette 测试 |
 | `frontend-browser` | demo 数据 + 启动后端 + preview + `visual_acceptance.py`（4 视口 × 2 主题 × 5 页面） |
 

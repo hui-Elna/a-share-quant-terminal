@@ -83,7 +83,7 @@ main.tsx
 
 - 页面不直接 `fetch`，统一走 `api/`；
 - 服务端状态归 React Query，本地 UI 状态归 `useState`；
-- 持久化只通过 `lib/algoSession`、`lib/backtestSession`、`lib/watchlist`；
+- 持久化只通过 `lib/algoSession`、`lib/backtestSession`；
 - 图表数值由后端计算，前端只做渲染与格式化。
 
 ---

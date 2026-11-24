@@ -123,7 +123,7 @@ api/ ──────────────► strategy/ ──► engine/ �
 
 ## 机器人推送
 
-每个交易日 **16:30 选股任务完成后**，系统自动把当日结果推送到企业微信群机器人。推送由后端定时任务触发，不依赖前端页面是否打开。
+每个交易日，系统在**盘后数据采集与入库校验完成后**自动生成仓位罗盘分析，再触发企业微信群机器人推送。整条链路串行执行，由后端定时任务与启动补跑共同触发，不依赖前端页面是否打开，也不要求进程恰好 16:30 在线。
 
 **推送内容**
 
@@ -131,7 +131,6 @@ api/ ──────────────► strategy/ ──► engine/ �
 - 只推送当前启用策略（`SPECS`：A3 / A4，可用 `PUSH_ALGOS` 再收窄），每个策略默认前 `PUSH_TOP_N=10` 只；
 - 观察候选（C1/C2/C3/C6）默认不推送；开启 `PUSH_OBSERVATION=1` 后附带「观察·未通过回测」标注；
 - 每只股票后追加一句话归因（优先复述触发的条件，其次复述评分构成，缺失时标注「归因缺失」）；
-- 命中自选的股票追加 `[自选]` 标记；开启 `PUSH_WATCHLIST_ONLY=1` 时只推送自选命中；
 - Markdown 消息超过 4 KB 自动截断，末尾附前端查看链接与「条件复述，非投资建议」提示。
 
 示例：
@@ -140,7 +139,7 @@ api/ ──────────────► strategy/ ──► engine/ �
 ## GFNA 选股播报 | 2026-11-16
 
 **央企 × 综合评分TOP（a3）**（2 只）
-1. 中国建筑(601668) 评分 8.10 — PE_TTM（8.0 lt 15.0）；股息率（5.2 gt 3.0） [自选]
+1. 中国建筑(601668) 评分 8.10 — PE_TTM（8.0 lt 15.0）；股息率（5.2 gt 3.0）
 2. 中国石化(600028) 评分 7.90 — 综合评分 7.9
 
 **高股息质量 × 低估值（a4）**（0 只）
@@ -162,7 +161,6 @@ api/ ──────────────► strategy/ ──► engine/ �
 | `PUSH_MODE` | `always` | `always`=无信号也推送；`signals_only`=仅有信号时推送 |
 | `PUSH_DRY_RUN` | `0` | `1`=只生成消息不发送 |
 | `PUSH_OBSERVATION` | `0` | 是否推送观察候选（C1/C2/C3/C6） |
-| `PUSH_WATCHLIST_ONLY` | `0` | `1`=只推送自选命中；`0`=推送全部（自选命中仍标 `[自选]`） |
 | `OBSERVATION_ALGOS` | 空 | 每日运行并入库的观察候选（如 `c1,c2`），与 `PUSH_OBSERVATION` 配合使用 |
 | `PUSH_FRONTEND_URL` | `http://127.0.0.1:5173/algo-center` | 消息末尾的查看链接 |
 
@@ -181,6 +179,7 @@ python scripts/push_cli.py --date 2026-11-16          # 补发指定交易日
 | 幂等 | `push_log` 对 `(run_id, channel)` 唯一；状态为 `sent` 的 run 不会重复推送 |
 | 重试 | 单次推送最多 3 次、指数退避；仍失败则记 `failed` 与脱敏错误，后续可再次触发 |
 | 隔离 | 推送异常只记日志，不影响选股与采集主流程 |
+| 告警 | 串行链路任一环节失败时发送企业微信告警；同一交易日同一环节只成功告警一次 |
 | 安全 | Webhook 仅从环境变量读取，不提交仓库、不写入日志 |
 
 ---
@@ -198,10 +197,9 @@ python scripts/push_cli.py --date 2026-11-16          # 补发指定交易日
 
 | 时间 | 任务 |
 |---|---|
-| 15:36 | 盘后数据流水线 |
-| 16:10 | ETF 同步与板块映射 |
-| 16:20 | 生成决策卡 |
-| 17:00 | 企业微信推送（复用 `WECOM_WEBHOOK_URL`） |
+| 15:36 | 盘后串行链路：数据采集 → 仓位罗盘 → 机器人推送（数据未通过校验则停止后续环节） |
+| 15:05–23:35 每 30 分钟 | 链路巡检：补跑失败或错过的罗盘/推送环节；数据失败且当日有额度时补采一次 |
+| 16:10 起每 2 小时 | 数据库备份（当天已有成功备份则跳过，保留 7 日 + 4 周） |
 | 17:30 | 纸面组合净值同步 |
 | 17:40 | 纸面组合聚合回填复盘表 |
 
@@ -367,6 +365,32 @@ python scripts/check_doc_routes.py               # 校验 API 契约与代码路
 
 ---
 
+## 备份与恢复
+
+数据库备份写入宿主机 `./backups`（已加入 `.gitignore`），默认保留 7 份日备份 +
+4 个自然周各一份。盘后每 2 小时巡检时，如果当天还没有成功备份就自动执行一次。
+
+```bash
+# 立即备份（容器内已安装 postgresql-client）
+docker compose exec backend python scripts/backup_db.py
+
+# 或调用管理接口
+curl.exe -X POST "http://127.0.0.1:8000/api/v1/admin/backup" -H "X-Admin-Key: $env:ADMIN_API_KEY"
+
+# 恢复演练：恢复到临时库并比对表数/行数/最新交易日，结束后自动删除临时库
+docker compose exec backend python scripts/restore_drill.py
+# 完整恢复（含索引/约束，耗时更长）
+docker compose exec backend python scripts/restore_drill.py --full
+```
+
+- 迁移前自动备份：`scripts/migrate_db.py` 在生产库升级前先执行 `pg_dump`，
+  备份失败会阻止迁移；`*_test` / `*_demo` 自动跳过。
+- 紧急情况可用 `--skip-backup` 或 `SKIP_MIGRATION_BACKUP=1` 跳过（不推荐）。
+- 真实恢复：先停后端，把 dump 恢复到新库并验证，再切换 `POSTGRES_DATABASE`；
+  不要直接覆盖正在使用的库。
+
+---
+
 ## 数据源与降级
 
 | 数据 | 主源 | 兜底 / 说明 |
@@ -405,10 +429,11 @@ python scripts/check_doc_routes.py               # 校验 API 契约与代码路
 | GET | `/api/v1/backtest/{code}/oos` | 样本外 walk-forward 结果（最新或指定 `oos_id`） |
 | POST | `/api/v1/backtest/{code}/oos` | 创建样本外任务（后台逐折执行） |
 | GET | `/api/v1/paper/portfolios` | 纸面组合列表 |
-| GET/PUT | `/api/v1/watchlist` | 自选状态（单租户） |
 | GET | `/api/v1/meta/freshness` | 数据集新鲜度 |
 | GET | `/api/v1/meta/provider-health?days=7` | 数据源 × 任务成功率、降级次数与最近错误 |
 | POST | `/api/v1/admin/ingest/{task}` | 手动触发采集（需 `X-Admin-Key`） |
+| POST | `/api/v1/admin/daily-chain` | 推进盘后串行链路：数据 → 罗盘 → 推送（需 `X-Admin-Key`） |
+| POST | `/api/v1/admin/backup` | 立即执行数据库备份（需 `X-Admin-Key`） |
 | GET | `/api/v1/compass/today` | 当日决策卡 + 预算 + 候选 + T+1 校验 |
 | GET | `/api/v1/compass/scenarios` | 六张情景卡与触发状态 |
 | GET | `/api/v1/compass/review` | 纸面组合复盘（回撤 / 避损 / 失效记录） |
@@ -417,7 +442,7 @@ python scripts/check_doc_routes.py               # 校验 API 契约与代码路
 | GET | `/api/v1/compass/admin/etf-coverage` | 全行业 / 候选池覆盖率（需 `X-Admin-Key`） |
 | POST | `/api/v1/compass/admin/backfill-paper` | 纸面组合聚合回填（需 `X-Admin-Key`） |
 
-> 机器人推送由定时任务在选股完成后触发，不暴露 HTTP 接口；手动预览/补发用 [`backend/scripts/push_cli.py`](backend/scripts/push_cli.py)。
+> 机器人推送由盘后串行链路触发（数据校验 → 罗盘 → 推送），不暴露 HTTP 接口；手动预览/补发用 [`backend/scripts/push_cli.py`](backend/scripts/push_cli.py)，链路补跑用 `POST /api/v1/admin/daily-chain`。
 
 统一错误体：
 
@@ -446,7 +471,7 @@ backend/
 │   ├── pipeline.py        任务编排（run_task / run_daily_pipeline）
 │   ├── worker.py          APScheduler 定时任务
 │   ├── catch_up.py        启动补最近缺失交易日
-│   ├── api/v1/            行情 / 个股 / 选股 / 回测 / 纸面 / 自选 / 元信息
+│   ├── api/v1/            行情 / 个股 / 选股 / 回测 / 纸面 / 元信息
 │   ├── core/              配置、常量、错误码、日志、状态枚举
 │   ├── db/                ORM、会话、分区与视图、种子
 │   ├── ingest/            Provider 链、各数据源、质量校验、批量回补

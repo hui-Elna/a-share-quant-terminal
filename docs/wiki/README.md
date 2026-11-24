@@ -33,7 +33,7 @@ L1 采集 ingest ──► L2 PostgreSQL 单一事实源
 - **可复现**：每次选股落 `stg_run`（run_id / 参数快照 / 数据版本），改参数必然产生新 run；
 - **诚实缺数据**：缺失值保留 `NULL`，不补 0；数据新鲜度由 `meta_data_quality` 统一表达；
 - **防未来函数**：估值按公告日 point-in-time，回测 T 日信号 T+1 开盘成交，策略包静态禁止负向 `shift`；
-- **单机自用边界**：API/前端/数据库只绑定 `127.0.0.1`，无账号体系，自选状态为单行共享。
+- **单机自用边界**：API/前端/数据库只绑定 `127.0.0.1`，无账号体系。
 
 ---
 
@@ -45,7 +45,7 @@ L1 采集 ingest ──► L2 PostgreSQL 单一事实源
 | 前端 | React 18、TypeScript 5.5、Vite 5、TanStack Query 5、Tailwind 4、Recharts、lightweight-charts |
 | 数据库 | PostgreSQL 16；`fact_stock_daily` 按年 RANGE 分区 |
 | 任务编排 | `backend/app/pipeline.py` 的 `run_task` / `run_daily_pipeline` |
-| 定时任务 | 15:36 盘后 / 16:30 选股 / 17:10 信号统计 / 17:30 纸面 / 02:00 补齐 / 定时新闻 |
+| 定时任务 | 15:36 盘后串行链路（数据 → 罗盘 → 推送）/ 每 30 分钟巡检 / 17:10 信号统计 / 17:30 纸面 / 02:00 补齐 / 定时新闻 |
 | 当前正式策略 | **A3、A4**；C1/C2/C3/C6 为观察候选；A1/A2/B1–B5/C4/C5 实现已移除，仅保留历史 run |
 | 后端入口 | `backend/app/main.py` → `app:app` |
 | CLI 入口 | `backend/scripts/pipeline_cli.py` |
@@ -111,9 +111,9 @@ backend/
 frontend/src/
 ├── api/                   HTTP 封装（按后端模块拆分）
 ├── hooks/                 React Query 查询/轮询
-├── pages/                 10 个路由页面
+├── pages/                 9 个路由页面
 ├── components/            图表、表格、回测、任务、命令面板
-├── lib/                   纯函数与本地状态（treemap/session/watchlist）
+├── lib/                   纯函数与本地状态（treemap/session）
 └── types/                 与后端契约对应的 TS 类型
 docs/                      V5 方案、API 契约、V6/V7/V8 任务书、evidence
 docker-compose.yml         PostgreSQL + FastAPI + Nginx

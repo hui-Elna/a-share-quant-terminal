@@ -6,6 +6,38 @@
 
 ---
 
+## 0. P0 修复：备份、数据重采与 API 回归（2026-11-24）
+
+| 变更 | 范围 |
+|---|---|
+| 新增数据库备份服务：`pg_dump -Fc` + sha256 + 7 日/4 周保留 + 原子落盘 | `backend/app/services/backup.py`、`scripts/backup_db.py` |
+| 迁移前自动备份，失败阻止迁移；`*_test`/`*_demo` 自动跳过 | `backend/scripts/migrate_db.py` |
+| 新增恢复演练脚本：恢复到临时库并比对表数/行数/最新交易日 | `backend/scripts/restore_drill.py` |
+| 盘后巡检增加数据补采：当日额度内触发一次完整采集，失败告警 | `backend/app/worker.py`、`backend/app/daily_chain.py`、`CATCH_UP` 配置 |
+| 新增 `DAILY_CHAIN_MAX_DATA_RETRIES`（默认 1） | `backend/app/core/config.py`、`.env.example` |
+| CI 集成任务增加演示数据全历史 + `test_api_v5.py`，API 回归不再被 skip | `.github/workflows/ci.yml` |
+| 新增 `POST /api/v1/admin/backup` 与 compose 备份卷 `./backups` | `backend/app/api/v1/admin.py`、`docker-compose.yml`、Dockerfile |
+
+验证：后端单元 748 passed / 36 skipped；DB 集成 36 passed；API 回归 27 passed / 1 skipped；
+契约与 Wiki 路由 77/77；真实库备份 1.24 GB 成功；恢复演练表数/行数/最新交易日全部一致。
+
+---
+
+## 0. 盘后串行链路：数据 → 仓位罗盘 → 机器人推送（2026-11-24）
+
+| 变更 | 范围 |
+|---|---|
+| 新增 `app/daily_chain.py`：数据门禁（`meta_data_quality` + 当日 `stg_run`）通过后才生成罗盘，罗盘卡片校验通过后才推送 | `backend/app/daily_chain.py` |
+| 取消 16:10 / 16:20 / 16:30 / 17:00 四个固定时点任务，合并为 15:36 串行链路 + 每 30 分钟巡检 | `backend/app/worker.py` |
+| 启动补跑完成后自动续跑未完成的罗盘/推送环节 | `backend/app/catch_up.py` |
+| 新增链路状态记录（`ingest_job(task=daily_chain)`）与失败告警（企业微信，按日/环节幂等） | `backend/app/daily_chain.py`、`backend/app/notify/alerts.py` |
+| 新增手动入口 `POST /api/v1/admin/daily-chain` | `backend/app/api/v1/admin.py`、`docs/V5-API-CONTRACT.md`、wiki |
+| 测试：链路顺序、前序失败阻断、非必需步骤失败不阻断、卡片校验、告警文案 | `backend/tests/test_daily_chain.py` |
+
+验证：后端单元 736 passed / 36 skipped；DB 集成 34 passed；契约与 Wiki 路由 76/76；`test_push.py` 11 passed。
+
+---
+
 ## 0. 文档一致性同步（2026-11-22）
 
 | 变更 | 范围 |
@@ -195,17 +227,16 @@
 
 ---
 
-## 0. V9 Batch E：推送归因与自选关联（2026-11-17）
+## 0. V9 Batch E：推送归因（2026-11-17）
 
 | 变更 | 文件 |
 |---|---|
 | 每条信号追加一句话归因（优先 `metrics.triggered` 条件，其次 `score_breakdown.parts`，缺失标注「归因缺失」） | `backend/app/notify/push.py`（`_one_line_reason`） |
-| 自选命中追加 `[自选]`；新增 `PUSH_WATCHLIST_ONLY=1` 只推送自选命中 | `push.py`、`backend/app/core/config.py`、`backend/.env.example` |
 | 消息尾注「条件复述，非投资建议」，截断预算预留尾注空间 | `push.py` |
-| 测试 | `backend/tests/test_push.py`、`backend/tests/integration/test_push_watchlist.py`（新增） |
+| 测试 | `backend/tests/test_push.py` |
 | README 推送配置与示例同步 | `README.md` |
 
-验收：`pytest tests/test_push.py` 11 passed；`PUSH_WATCHLIST_ONLY` 集成测试 1 passed。
+验收：`pytest tests/test_push.py` 通过。
 
 ---
 
@@ -680,7 +711,7 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 **前端**
 
 - `AlgoCenter` 在策略卡片下方、`#algo-detail` 上方新增 `ConsensusBoard`，**默认折叠**（折叠时不发请求）；展开后请求 `min_count=2`。
-- 表格列：代码+名称（含板块/央企标注）、命中徽章（实心/空心圆 `●●○○○○○ 2/7`，按命中率给主色深浅，7/7 最深）、行业、当日涨跌、综合评分、命中策略 chips（点击展开各策略 rank/score/metrics 前 3 项，可"选中策略"跳转详情）、自选星标（复用 `frontend/src/lib/watchlist.ts`，localStorage `gfna-watchlist`，上限 100）。
+- 表格列：代码+名称（含板块/央企标注）、命中徽章（实心/空心圆 `●●○○○○○ 2/7`，按命中率给主色深浅，7/7 最深）、行业、当日涨跌、综合评分、命中策略 chips（点击展开各策略 rank/score/metrics 前 3 项，可"选中策略"跳转详情）。
 - `min_count` 滑杆 2–5；固定展示"各策略评分量纲不同，榜单按命中策略数排序，不做跨策略分数平均。"
 
 **验证（2026-10-30，数据截至 2026-10-26）**
@@ -689,13 +720,12 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 - 失效 run 排除：临时将 `b1` 当日 run 置为 `failed`，`total_algos_evaluated` 7→6、`b1` 命中项消失；恢复后回到 7 / 20 条 b1 信号，库内状态已还原。
 - 性能：引擎进程内 10–13 ms；HTTP 冷启 43 ms、稳定 15–17 ms（< 100 ms 要求）。
 - 测试：新增 `test_consensus.py` 14 项纯逻辑单测、`test_api_v5.py` 2 项接口用例；全量 `pytest` **233 passed**（GFNA_TEST_DB=1）。
-- 前端：`npm run build` 通过（index 901.52 kB / gzip 265.91 kB）；浏览器实测默认折叠零请求、展开 12 行、徽章 `●●○○○○○ 2/7`、601838 详情 A4 rank 3 / A3 rank 45 各带 3 项 metrics、滑杆 3 空态、2 恢复、自选增删、选中策略跳转详情；Console 无新增错误，Jobs/Dashboard/个股页无回归。
+- 前端：`npm run build` 通过（index 901.52 kB / gzip 265.91 kB）；浏览器实测默认折叠零请求、展开 12 行、徽章 `●●○○○○○ 2/7`、601838 详情 A4 rank 3 / A3 rank 45 各带 3 项 metrics、滑杆 3 空态、2 恢复、选中策略跳转详情；Console 无新增错误，Jobs/Dashboard/个股页无回归。
 
 **已知**
 
 - 当日真实数据只有 `a3/a4/b1/b2/b3/b5` 产生非回测信号（`b4` 0 条），因此 `hit_count` 目前最大为 2；`min_count≥3` 为空是数据积累问题，不是口径错误。
 - 同一策略当日的多个参数 run 都参与命中判定（任务书要求"当日全部成功 run"），若后续同一策略频繁多 run，`hit_count` 只按 `distinct algo_code` 计，不会因多 run 重复计数。
-- 共识榜未接入自选页（T8 才建完整自选面板），当前星标仅落 localStorage。
 
 ### 7.8 T7 信号逐条解释（2026-10-30）
 
@@ -744,40 +774,7 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 - 前端在门槛未通过或指数缺失时，于结果表上方显示原因（b4：收盘 < MA20 × 0.995；b5：当日跌幅 ≤ -2%），空态文案同步为“市场环境未满足”。
 - 验证：b4 2026-10-26 显示“沪深300 收盘 4103.54 < MA20 × 0.995 = 4254.29，本次不产生信号”；缓存回读一致；pytest / build / 浏览器通过。
 
-### 7.10 T8 自选股 + 站内信号提醒（2026-10-31）
-
-**目标**：自选股命中策略时导航栏出红点；轮询实现，不引入 WebSocket；无账号体系，名单与已读水位存**服务端单租户行**，localStorage 仅作本机缓存。
-
-**后端**
-
-- 新增 `engine/watch_hits.py`：单条 SQL（`stg_signal ⋈ stg_run` + `code = ANY(:codes)`）查询近 N 个交易日命中，参数全部绑定；过滤当前 `SPECS`、`status='success'`、`is_backtest IS FALSE`；同一 `(algo_code, date, code)` 只保留名次最优 run。窗口以最近一个非回测成功 run 的交易日为锚点，不依赖 `CURRENT_DATE`。
-- 新增 `POST /api/v1/algo/hits`（契约 5.6）：`codes` 去重后 ≤100、每项 1–6 位数字（统一错误体 `INVALID_PARAM`），`days` 1–60；返回 `items[{code,name,algo_code,algo_name,signal_date,rank,hit_id}]`、`latest_signal_date`、`freshness`、`days`。POST 仅为容纳长代码列表，语义是只读查询。
-- 新增单行状态表 `app_watchlist_state`（Alembic `0006_watchlist_state`）：`id=1` 检查约束、`codes`/`seen_hits` JSONB、`updated_at`；`engine/watch_state.py` 提供读取与单行 upsert（部分更新、last-write-wins）。
-- 新增 `GET/PUT /api/v1/watchlist`（契约 5.7）：`codes` 复用 5.6 校验（≤100），`seen_hits` 校验 `algo_code:YYYY-MM-DD` 与真实日期（≤500），非法统一 422 `INVALID_PARAM`；响应始终返回完整状态。
-- 测试：`tests/test_watch_hits.py` 13 项、`tests/test_watch_state.py` 17 项纯校验；`test_api_v5.py` 增加 5 项接口用例（命中、排除回测、越界/注入 422、状态 roundtrip 与部分更新、状态校验）。
-
-**前端**
-
-- `lib/watchlist.ts`：服务端单行为事实源，localStorage `gfna-watchlist` / `gfna-watchlist-seen` 仅缓存，`gfna-watchlist-pending` 标记未同步改动；启动 hydrate（本地 pending 优先推送；服务器为空时迁移本地名单；已读取并集），写入 400ms 防抖、失败 15 秒重试、`online` 立即重试；版本号防止在途 PUT 覆盖并发改动；隐私模式降级内存态，但刷新后可从服务器恢复。
-- `hooks/useWatchSignals.ts`：60 秒轮询，仅 `document.visibilityState === 'visible'` 时启用（`refetchIntervalInBackground: false`）；`retry: false`（`client.ts` 已含一次 5xx/网络重试）；已读按 `hit_id = algo_code:signal_date` 去重，同一策略同一天多只股票只算一条提醒；新增 `useWatchSyncStatus` 供面板显示同步状态。
-- 导航栏新增“自选”入口与 `bg-alert` 红点（>9 显示 `9+`，`aria-label="自选股有 N 条新信号"`，键盘可达）；新增 `/watchlist` 页（进入即写已读水位），列出自选、最近命中与明细表。
-- 个股详情头部“☆ 加入自选 / ★ 已自选”；盘后分析龙头股旁快捷星标与自选区；新增 `WatchButton`、`WatchlistPanel` 组件。共识榜沿用 T6 星标，现与导航栏同步。面板与星标提示改为“名单保存在本机缓存并同步到服务器”，底部显示 `syncing / synced / offline`。
-
-**验证（数据截至 2026-10-26）**
-
-- 实测命中：`000739` → b2（rank 2）、`000560` → b3（rank 1），红点 = 2；进入 `/watchlist` 后已读水位写入两条，红点消失。
-- 服务端同步：清理全部 `gfna-watchlist*` 后刷新，从服务器恢复 2/100 与已读水位、红点不误报；移除/新增一只后 GET 分别返回 `["000560"]` 与 `["000560","000739"]`。
-- 隐私模式：仅让 `gfna-watchlist*` 的 storage 抛错，页面仍从服务器恢复 2/100；增删照常落库，刷新后恢复，`pending` 为空。
-- 后台轮询（真实双标签页）：headless Chrome 156 + CDP，标签 A `/watchlist` 为 `visible`，切到真实标签 B 后 A 为 `hidden`；65 秒内 `/algo/hits` 新增 **0** 次；切回 A 恢复 `visible` 后 65 秒内恢复 **1** 次。
-- 接口校验：200 个 codes、`"'; drop"`、`days=0/61` 均 422；参数绑定无注入面。
-- `pytest` 全量 **277 passed**；`npm run build` 通过（index 923.76 kB / gzip 272.60 kB）；浏览器 Console 无新增错误，Dashboard/个股页无回归。
-
-**已知**
-
-- 单租户共享：所有浏览器访问同一后端即共享同一份名单，无用户隔离与鉴权；公网/多用户前需加用户维度（接口加 `user_id` 或独立表）。写入为 last-write-wins，两个浏览器同时编辑以最后提交为准，单机自用可接受。
-- `days` 越界由 FastAPI 参数校验返回默认 422 结构（非统一错误体），与现有接口一致；`codes` 业务校验走统一错误体。
-
-### 7.11 T9 回测面板增强（2026-10-31）
+### 7.10 T9 回测面板增强（2026-10-31）
 
 **目标**：月度收益、回撤、滚动超额、行业暴露四个视图全部从已落库的 `equity_curve` / `trades` 派生，不重跑回测；历史记录缺数据时明确降级。
 
@@ -885,8 +882,8 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 **前端**
 
 - 新增 `useDelayedFlag(active, delay=150)`（自研，不引依赖）与 `StateViews` 骨架原语：`SkeletonLine / SkeletonCard / SkeletonTable(rows, cols) / SkeletonChart(h) / SkeletonKpiRow`。
-- 9 处 `animate-spin` 全部移除（`grep -r animate-spin frontend/src` = 0）：`AlgoParamPanel`、`BacktestPanel`、`SensitivityMatrix`、`RunMetaPanel`、`SectorHeatmap`、`WatchlistPage`、`PaperPage`、`HomePage`、`DetailPage`；按钮内等待态改为静态图标 + 骨架点，不再旋转。
-- 关键实现：加载时**始终渲染完整骨架布局**，150ms 前用 `visibility: hidden` 占位、之后才可见。避免“空白 → 骨架 → 内容”两次位移；Dashboard/Home/Detail/Paper/Watchlist/Jobs 六个页面统一此模式。
+- 9 处 `animate-spin` 全部移除（`grep -r animate-spin frontend/src` = 0）：`AlgoParamPanel`、`BacktestPanel`、`SensitivityMatrix`、`RunMetaPanel`、`SectorHeatmap`、`PaperPage`、`HomePage`、`DetailPage`；按钮内等待态改为静态图标 + 骨架点，不再旋转。
+- 关键实现：加载时**始终渲染完整骨架布局**，150ms 前用 `visibility: hidden` 占位、之后才可见。避免“空白 → 骨架 → 内容”两次位移；Dashboard/Home/Detail/Paper/Jobs 页面统一此模式。
 - `index.css` 在 `prefers-reduced-motion: reduce` 下关闭 `.skeleton` 的 shimmer 动画。
 - `ErrorState` 从 `detail.next_action` 提取建议文案（类型收窄，缺失则不渲染）；`HomePage` 原内联“⚠️ 加载失败”改为 `ErrorState` + `refetch`，补齐重试入口。
 - `main.tsx` 查询默认 `networkMode: 'always'`：默认 `online` 模式断网时查询被挂起（`isLoading=false`），页面会落到“暂无数据”且没有重试按钮；改为真实发请求、由 `client.ts` 统一报 `NETWORK_ERROR`。`client.ts` 重试语义未改动。
@@ -896,13 +893,13 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 - 600ms 延迟下点击 `/dashboard`：首个**可见**骨架 **186ms**（>150ms 防闪烁生效），骨架节点 16 个，可见持续 5060ms；接口耗时 3719ms。
 - 布局守恒：骨架 `minTop=89` 与终态 `h1Top=89` 一致；`PerformanceObserver('layout-shift')` **0 条 / CLS 0.0000**（修复前空白占位过渡 CLS 0.5559，来源为 FOOTER 与 Navbar 位移）。
 - reduced-motion 模拟下骨架 `animation-name=none / duration=0s`；禁用文案扫描 `-0.0%`/`NaN` 命中 0；加载稳定后骨架与 spinner 计数均为 0。
-- 断网（`offline:true`，`navigator.onLine=false`）：`/dashboard`、`/paper`、`/algo-center`、`/stocks/600519`、`/` 均显示 `ErrorState` + `NETWORK_ERROR` + 1 个重试按钮，骨架/spinner 均为 0；`/watchlist` 与 `/jobs` 强制刷新同样进入错误态并可重试；恢复网络后点重试，`/paper` 回到正常数据。
+- 断网（`offline:true`，`navigator.onLine=false`）：`/dashboard`、`/paper`、`/algo-center`、`/stocks/600519`、`/` 均显示 `ErrorState` + `NETWORK_ERROR` + 1 个重试按钮，骨架/spinner 均为 0；`/jobs` 强制刷新同样进入错误态并可重试；恢复网络后点重试，`/paper` 回到正常数据。
 - `next_action` 真实样本：`/algo-center` 发起 2026-10-31~2026-11-01 回测 → `回测执行失败`、`DATA_NOT_READY`、「交易日数量不足，无法回测」、`建议：POST /api/v1/admin/ingest/calendar`，重试按钮可用。
 - `pytest` 全量 **318 passed**；`npm run test:treemap` 6 passed；`npm run build` 通过（index 980.23 kB / gzip 287.65 kB，CSS 47.95 kB，KlineChart 194.96 kB，仅既有 chunk 体积告警）。
 
 **已知**
 
-- `/watchlist` 断网首次进入可能先显示导航栏缓存的命中结果（共享 `useWatchBadge` 查询，`staleTime` 5 分钟），需点“刷新命中”才会出现错误态；属缓存优先策略，非骨架缺陷。
+- 断网场景下页面首次进入可能先显示缓存结果（`staleTime` 5 分钟），需手动刷新才会出现错误态；属缓存优先策略，非骨架缺陷。
 - `networkMode: 'always'` 会让断网时真实发出请求并失败，比默认挂起多产生一次失败请求；换来的是明确错误态与重试入口。
 - 按钮内等待态现为静态图标 + 骨架点，不再有旋转动画；视觉上不再暗示“正在进行”，长任务需配合文案。
 - 验收脚本创建的失败回测行（2026-10-31~2026-11-01）留在 `backtest_run` 表；该行不计入策略统计（统计只取 `status='success'` 且 `is_backtest=false`）。
@@ -943,7 +940,7 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 
 **前端**
 
-- 新增 `src/lib/navigation.ts`：抽出共享 `NAV_ITEMS`（7 个现有路由：首页/盘后分析/选股中心/纸面跟踪/自选/任务监控/关于）与 `PALETTE_OPEN_EVENT`，Navbar 与面板共用，避免循环依赖。
+- 新增 `src/lib/navigation.ts`：抽出共享 `NAV_ITEMS`（现有路由：首页/盘后分析/选股中心/纸面跟踪/任务监控/关于）与 `PALETTE_OPEN_EVENT`，Navbar 与面板共用，避免循环依赖。
 - 新增 `src/lib/palette.ts`：`mergeRecent` 按 `kind+path` 去重并置顶、上限 10；`loadPaletteRecent` 校验条目/去重/截断，非法 JSON 与存储抛错均降级为空；`splitHighlight` 仅做大小写不敏感子串切分并保留原文大小写。
 - 新增 `src/components/CommandPalette.tsx`：Ctrl/⌘+K 切换、Esc 关闭、↑↓ 循环选择、Enter 跳转、Tab/Shift+Tab 切换有结果的分组；`role="dialog" aria-modal="true"` + `role="combobox"`/`listbox`/`option` 与 `aria-activedescendant`；打开时锁 `body` 滚动、记录并归还触发元素焦点；关闭/卸载还原。
 - 股票搜索：`/stocks/search` 最少 1 字符、250ms 防抖、最多 8 条，React Query `signal` 透传到 `client.ts`，输入变化自动 abort 上一请求；IME 组合期（`compositionstart`→`compositionend`）不发起请求，组合结束后才重新计时。
@@ -963,7 +960,7 @@ tooltip 同时给出 `pct_chg`，不会把涨跌幅显示错；若产品要求�
 - XSS：输入 `<img src=x onerror=xss()>` 与 `<script>window.__xss=2</script>`（均 ≤32 字符以便通过后端校验），输入框保留原字符串、空态文案原样显示，DOM 内 `img/script` 节点均为 **0**，`window.__xss` 始终 `undefined`。
 - 焦点/滚动：连按 Tab/Shift+Tab 各 3 次，焦点始终在输入框、活动分组在页面/策略间循环；打开前 `scrollY=300`，打开后与滚轮 600 后仍为 **300**；Esc 后焦点归还 Navbar `⌘K`。
 - 原行为：Navbar 新闻搜索提交后 URL 为 `/?q=%E6%B5%8B%E8%AF%95%E6%96%B0%E9%97%BB`，`⌘K` 提示仍在；全程无 5xx、无 console error/exception（仅既有 React Router v7 future flag 警告）。
-- 相邻页面冒烟（整页刷新后 Ctrl+K 开合）：`/paper`、`/watchlist`、`/jobs`、`/about`、`/stocks/600519`、`/algo-center?algo=b1` 关键文本均存在；面板分别 14/7/7/7/14/14 项、焦点在输入框、`overflow:hidden`；Esc 后 `overflow` 还原；冷启动深链页仅 B1 卡片出现「已选中」，URL 保留 `algo=b1`；0 console error、0 exception、0 个 5xx。
+- 相邻页面冒烟（整页刷新后 Ctrl+K 开合）：`/paper`、`/jobs`、`/about`、`/stocks/600519`、`/algo-center?algo=b1` 关键文本均存在；面板分别 7/7/7/14/14 项、焦点在输入框、`overflow:hidden`；Esc 后 `overflow` 还原；冷启动深链页仅 B1 卡片出现「已选中」，URL 保留 `algo=b1`；0 console error、0 exception、0 个 5xx。
 - `npm run test:palette` 7 passed、`test:treemap` 6 passed、`test:sparkline` 12 passed、后端 `pytest tests -q` **285 passed / 33 skipped**；`npm run build` 通过（index 994.24 kB / gzip 292.52 kB，较 T14 +10.71 kB / +3.53 kB；CSS 50.45 kB，KlineChart 194.96 kB，仅既有 chunk 体积告警）。
 
 **已知**

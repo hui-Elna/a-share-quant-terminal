@@ -15,7 +15,7 @@ V5 已经打通"真实数据 → 特征 → 策略 → 回测"的主链路，但
 V6 目标分三层，按感知强度与实现成本排序：
 
 1. **行情呈现**（感知最强、成本最低）：把已有日线/特征表的信息密度做满 —— 指数多周期对比、市场温度计、板块 treemap、真正的 K 线。
-2. **算法中心**（从"给名单"到"给依据、给跟踪"）：策略天梯、多策略共识、信号逐条解释、参数敏感性、回测面板增强、纸面组合跟踪、自选股信号提醒。
+2. **算法中心**（从"给名单"到"给依据、给跟踪"）：策略天梯、多策略共识、信号逐条解释、参数敏感性、回测面板增强、纸面组合跟踪。
 3. **视觉科技感**（信息密度优先、动效克制）：统一设计系统、骨架屏、sparkline、Ctrl+K 命令面板。
 
 **共同原则：信息密度优先，动效克制。** 炫酷过头会牺牲加载速度和可读性，反而扣分。任何视觉改动都要同时看数据正确性和首屏体积。
@@ -148,7 +148,6 @@ docker compose up -d --build    # 全栈，首次 5–10 分钟
 | T5 | 策略天梯（信号前瞻收益与胜率） | 算法 | P0 | 2 天 | — |
 | T6 | 多策略共识榜 | 算法 | P1 | 0.5 天 | — |
 | T7 | 信号逐条解释 | 算法 | P0 | 2 天 | — |
-| T8 | 自选股 + 站内信号提醒 | 算法 | P1 | 1 天 | T6 或 T5 |
 | T9 | 回测面板增强（月度/回撤/滚动超额/行业暴露） | 算法 | P1 | 1 天 | T2 |
 | T10 | 参数敏感性矩阵 | 算法 | P1 | 2 天 | T9 |
 | T11 | 纸面组合跟踪 | 算法 | P1 | 2 天 | T5、T9 |
@@ -446,7 +445,7 @@ docker compose up -d --build    # 全栈，首次 5–10 分钟
 **前端改动**
 
 4. `AlgoCenter.tsx` 新增"共识榜"区块（默认折叠在策略卡片之下，因为天梯 T5 才是首要信息）：
-   - 表格列：代码/名称 / **命中数徽章（●●●●○○○）** / 行业 / 当日涨跌 / 综合分 / 命中策略列表（可点开跳转各策略该票的 `metrics`）/ 加入自选（复用 T8 的 store）。
+   - 表格列：代码/名称 / **命中数徽章（●●●●○○○）** / 行业 / 当日涨跌 / 综合分 / 命中策略列表（可点开跳转各策略该票的 `metrics`）。
    - 命中数用色阶，7/7 满命中视觉最重；`min_count` 滑块 2–5。
    - 明确文案："各策略评分量纲不同，榜单按命中策略数排序，不做跨策略分数平均。"
 
@@ -503,40 +502,6 @@ docker compose up -d --build    # 全栈，首次 5–10 分钟
 - `POST /algo/B1` 返回的 signals 每项含非空 `triggered`，无 numpy/Decimal 序列化报错。
 - 前端：B1 命中票的解释条目数与 `CONDITION_SPECS["B1"]` 条件数一致；旧 run 显示降级提示。
 - A3 分项之和与 `composite_score` 的关系在 UI 上可自洽解释（加权/截断规则写明）。
-
----
-
-#### T8 自选股 + 站内信号提醒
-
-**目标**：命中自选股时在导航栏出红点，轮询即可，**不引入 WebSocket**。
-
-**存储决策（已定，按此实现）**
-
-> 项目**没有任何认证与用户体系**（backend 无 `user_id`/登录/token，前端无 watchlist/favorite 代码，唯一 localStorage 用法是 `gfna-theme`）。本任务**不建服务端用户表、不做登录**：自选股名单存 `localStorage`（key `gfna-watchlist`），提醒状态每次由服务端按提交 codes 计算。后续若引入账号，再把这套 store 换成服务端 API，接口形状保持不变。
-
-**前端改动**
-
-1. `frontend/src/lib/watchlist.ts`：`getWatchlist(): string[]` / `toggleWatch(code)` / `MAX_WATCHLIST = 100`（超限提示并拒绝写入）；写入包 try/catch（隐私模式 localStorage 会抛），失败时降级为内存态并在 UI 提示"本浏览器不保存自选"。
-2. `hooks/useWatchSignals.ts`：`refetchInterval: 60_000`（复用 `client.ts` 的 GET 重试语义），只在页面可见时轮询（`document.visibilityState`，切后台停轮询，省电省 QPS）。
-3. 自选管理 UI：个股详情页 `/stocks/:code` 头部"☆ 加入自选 / ★ 已自选"按钮；`/dashboard` 与共识榜行内快捷按钮；新建 `components/WatchlistPanel.tsx`（列表 + 移除 + 跳转 + 最近一次命中摘要）。
-4. 导航栏红点：`components/Navbar.tsx` 在"自选"入口（新增 `NAV_ITEMS` 项 `/watchlist`）上渲染 badge —— 命中数（>9 显示 `9+`）。红点色用语义 token（T12 定义的 `--color-alert`），**不要与"上涨红"混淆**；`aria-label="自选股有 N 条新信号"`，键盘可达。
-5. 命中判定：以 `algo_code` + `signal_date` 为去重键，只提示"上次已读之后"的新命中；已读水位存 localStorage（`gfna-watchlist-seen`），进入 `/watchlist` 页即更新水位。
-
-**后端改动**
-
-6. 新接口 `POST /api/v1/algo/hits`，body `{"codes": ["600000", …], "days": 10}`：
-   - 校验 `codes` 为 1–6 位数字串、去重、长度 ≤ 100（超出 422），`days` ∈ [1, 60]；
-   - 返回该批票近 N 个交易日的命中：`{items:[{code, name, algo_code, algo_name, signal_date, rank, hit_id:"algo_code:signal_date"}], latest_signal_date, freshness}`；
-   - **必须排除回测 run**（`is_backtest IS FALSE`）；
-   - 用一条 SQL（`stg_signal ⋈ stg_run` + `code = ANY(:codes)`）完成，禁止逐票循环。
-   - 用 POST 而非 GET 是因为 codes 列表可能长；实现里注明这是"只读查询，语义上等价 GET"。
-
-**验收**
-
-- 加自选→刷新→名单持久化；清 localStorage 后功能整体降级但不报错。
-- 自选票今日命中 B2/B3 → 导航栏红点 = 2；进入 `/watchlist` 后消失。
-- 切到后台标签页时网络面板无轮询请求。
-- `codes` 传 200 个 / 传 `"'; drop"` 分别返回 422 与校验失败，无 SQL 注入面（参数绑定，不拼字符串）。
 
 ---
 
@@ -821,8 +786,6 @@ T<n> <任务名> — 完成 / 阻塞
 
 | 议题 | 默认决定 | 理由 |
 |---|---|---|
-| 自选股存储 | `localStorage`，不建服务端表 | 项目无认证；引入账号的成本远大于该功能价值 |
-| 提醒通道 | 60s 轮询 + 页面可见性门控 | 不引 WebSocket，服务端零推送负担 |
 | treemap 布局 | 手写 squarify + 单测 | 不新增依赖，且需要可控的退化输入处理 |
 | K 线库 | `lightweight-charts` | 缩放/十字光标/成交量/标记开箱可用，体积可控 |
 | 天梯胜率口径 | 信号级 5/10/20 日胜率（≠ 回测 FIFO 回合胜率） | 与"策略天梯"的问题域匹配，UI 必须标注口径 |

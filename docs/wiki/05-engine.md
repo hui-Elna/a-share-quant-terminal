@@ -383,11 +383,6 @@ R = 创业板50 收盘 / 红利低波50 收盘
 
 `build_consensus` L100、`consensus_signals` L210。
 
-### 9.3 自选命中与状态
-
-- [`engine/watch_hits.py`](../../backend/app/engine/watch_hits.py)：`normalize_hits_codes` L29、`watchlist_hits` L97；一条 SQL，参数绑定；最多 100 个代码、60 日回看。
-- [`engine/watch_state.py`](../../backend/app/engine/watch_state.py)：`normalize_seen_hits` L25、`load_watchlist_state` L68、`save_watchlist_state` L75；单行状态。
-
 ---
 
 ## 10. 回测派生视图
@@ -478,5 +473,3 @@ R = 创业板50 收盘 / 红利低波50 收盘
 | `backtest_view.py` | `build_backtest_extras` | 362 |
 | `paper.py` | `sync_paper_portfolio` / `get_paper_detail` | 288 / 703 |
 | `report_input.py` | `build_daily_report_input` | 301 |
-| `watch_hits.py` | `watchlist_hits` | 97 |
-| `watch_state.py` | `load/save_watchlist_state` | 68 / 75 |
