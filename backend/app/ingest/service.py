@@ -2134,15 +2134,18 @@ async def collect_sector_members(
                 # 板块整体消失：仅在当日板块清单完整时关闭其全部开区间。
                 # sector_daily 部分成功（例如只拿到行业板块）仍可能通过质量门，
                 # 直接按"消失"关闭会误伤大量仍存在的板块。
-                open_sector_codes = set(open_members)
+                # 只看目标池：历史遗留的非目标池板块不计入“清单缺失”，
+                # 否则 479 个旧板块会把 53 个目标板块的正常清单误判成 11% 覆盖。
+                managed_codes = set(allowed)
                 current_sector_codes = set(sector_info)
-                missing_sectors = open_sector_codes - current_sector_codes
+                open_managed = set(open_members) & managed_codes
+                missing_sectors = open_managed - current_sector_codes
                 sector_list_coverage = (
-                    len(open_sector_codes & current_sector_codes) / len(open_sector_codes)
-                    if open_sector_codes else 1.0
+                    len(open_managed & current_sector_codes) / len(open_managed)
+                    if open_managed else 1.0
                 )
                 sector_list_incomplete = (
-                    len(open_sector_codes) >= _SECTOR_LIST_MIN_SECTORS
+                    len(open_managed) >= _SECTOR_LIST_MIN_SECTORS
                     and sector_list_coverage < _SECTOR_LIST_MIN_COVERAGE
                 )
                 if missing_sectors and not sector_list_incomplete:
@@ -2158,10 +2161,10 @@ async def collect_sector_members(
                         closed += result.rowcount or 0
                 if sector_list_incomplete:
                     logger.error(
-                        "当日板块清单仅覆盖 %d/%d 个已有成分板块（%.1f%%），"
+                        "当日板块清单仅覆盖 %d/%d 个目标池已有成分板块（%.1f%%），"
                         "%d 个缺失板块本次不关闭成分区间",
-                        len(open_sector_codes & current_sector_codes),
-                        len(open_sector_codes), sector_list_coverage * 100,
+                        len(open_managed & current_sector_codes),
+                        len(open_managed), sector_list_coverage * 100,
                         len(missing_sectors),
                     )
 
@@ -2228,11 +2231,25 @@ async def collect_sector_members(
                                 "（已有成分未动，重跑可补）"
                             ),
                         )
+                # 行业源整体不可用属于“源故障”，不是数据质量/数量问题：
+                # 标记 stale + 告警，保留已有成分，不把监控刷成 quality_failed。
+                provider_outage = bool(
+                    success_count == 0 and industry_source_down and failed == 0
+                )
                 if success_count == 0:
                     report.add(
-                        "no_sector_fetched", severity="error",
-                        message="所有板块成分抓取失败",
+                        "no_sector_fetched",
+                        severity="warning" if provider_outage else "error",
+                        message=(
+                            "行业成分源不可用，本次未更新（已有成分保持不变，重跑可补）"
+                            if provider_outage
+                            else "所有板块成分抓取失败"
+                        ),
                     )
+                if provider_outage:
+                    # 源不可用时没有“覆盖率”可言，显示 0% 会被误读成数量不够。
+                    report.expected = None
+                    report.coverage = None
                 if sector_list_incomplete:
                     severity = (
                         "error"
@@ -2244,15 +2261,16 @@ async def collect_sector_members(
                         count=len(missing_sectors),
                         severity=severity,
                         message=(
-                            f"当日板块清单仅覆盖已有成分板块的 "
+                            f"当日板块清单仅覆盖目标池已有成分板块的 "
                             f"{sector_list_coverage:.1%}，{len(missing_sectors)} 个缺失板块"
                             "本次不关闭成分区间（防止清单不完整误关）"
                         ),
                     )
-                await record_quality(
-                    session, dataset, report, trade_date,
-                    QualityStatus.OK if report.ok else QualityStatus.QUALITY_FAILED,
+                status = (
+                    QualityStatus.STALE if provider_outage
+                    else (QualityStatus.OK if report.ok else QualityStatus.QUALITY_FAILED)
                 )
+                await record_quality(session, dataset, report, trade_date, status)
 
             elapsed = int((time.perf_counter() - started) * 1000)
             result = FetchResult(
@@ -2277,13 +2295,14 @@ async def collect_sector_members(
                     "no_change": (added + closed) == 0,
                     "attempts": getattr(chain, "last_attempts", None),
                 },
-                # 全部失败时质量记录是 quality_failed，不能被 run_task 的 mark_success 洗成 ok
+                # 全部失败/源故障时质量记录不是 ok，不能被 run_task 的 mark_success 洗成 ok
                 quality_status=(
-                    QualityStatus.OK.value if report.ok else QualityStatus.STALE.value
+                    QualityStatus.OK.value if report.ok and not provider_outage
+                    else QualityStatus.STALE.value
                 ),
             )
             await job.finish(
-                "success" if not failed else "partial",
+                "partial" if (failed or provider_outage) else "success",
                 done=len(sectors),
                 failed=failed,
                 rows_written=added + closed,

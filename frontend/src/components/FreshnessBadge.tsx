@@ -52,6 +52,27 @@ const STATUS_META: Record<FreshnessStatus, StatusMeta> = {
   },
 }
 
+/** 板块类数据集按目标池展示，避免把“非全市场”误读成“数量不够”。 */
+function datasetCoverageLabel(dataset: string): string {
+  if (dataset === 'sector_pool') return '可交易占比'
+  if (dataset === 'sector_daily' || dataset === 'sector_snapshot' || dataset === 'sector_members') {
+    return '目标池覆盖'
+  }
+  if (dataset === 'moneyflow') return '周更覆盖'
+  return '覆盖率'
+}
+
+function datasetCoverageHint(dataset: string): string | null {
+  if (dataset === 'sector_pool') {
+    return '口径：候选池 → 可交易池；低于 100% 是 ETF 映射/流动性过滤，不是数据缺失'
+  }
+  if (dataset === 'sector_daily' || dataset === 'sector_snapshot' || dataset === 'sector_members') {
+    return '口径：目标池（同花顺行业 + 主题白名单），不是全市场板块'
+  }
+  if (dataset === 'moneyflow') return '口径：每周全市场快照'
+  return null
+}
+
 /** 生成 title 提示文本（完整信息，避免额外弹层组件） */
 function buildTitle(item: Freshness): string {
   const parts = [
@@ -60,9 +81,11 @@ function buildTitle(item: Freshness): string {
     `最后成功：${fmtDateTime(item.last_success_at)}`,
     `最后交易日：${item.last_trade_date ?? '—'}`,
     `行数：${fmtInt(item.rows)}`,
-    `覆盖率：${fmtRatio(item.coverage)}`,
+    `${datasetCoverageLabel(item.dataset)}：${fmtRatio(item.coverage)}`,
     `异常数：${fmtInt(item.anomalies)}`,
   ]
+  const hint = datasetCoverageHint(item.dataset)
+  if (hint) parts.push(hint)
   if (item.error) parts.push(`错误：${item.error}`)
   return parts.join('\n')
 }
@@ -129,7 +152,7 @@ export default function FreshnessBadge({
                   <dd className="num mt-0.5">{fmtInt(item.rows)}</dd>
                 </div>
                 <div>
-                  <dt className="text-muted-foreground">覆盖率</dt>
+                  <dt className="text-muted-foreground">{datasetCoverageLabel(item.dataset)}</dt>
                   <dd className="num mt-0.5">{fmtRatio(item.coverage)}</dd>
                 </div>
                 <div>
@@ -172,7 +195,9 @@ export default function FreshnessBadge({
             <span className="font-medium">{item.display_name}</span>
             <span className="opacity-80">{meta.label}</span>
             {item.coverage !== null && (
-              <span className="hidden opacity-70 num sm:inline">覆盖 {fmtRatio(item.coverage)}</span>
+              <span className="hidden opacity-70 num sm:inline">
+                {datasetCoverageLabel(item.dataset)} {fmtRatio(item.coverage)}
+              </span>
             )}
             <span className="hidden opacity-60 num sm:inline">{lastSuccess}</span>
           </span>

@@ -92,6 +92,7 @@ def _patch_service(
     open_members: dict[str, set[str]] | None = None,
     partial_members: dict[str, set[str]] | None = None,
     sector_info: dict[str, dict] | None = None,
+    pool_codes_override: tuple[str, ...] | None = None,
     upserted: list[dict] | None = None,
 ):
     session = _FakeSession()
@@ -116,13 +117,13 @@ def _patch_service(
             for index in range(sector_count)
         }
 
-    def pool_codes() -> tuple[str, ...]:
+    def board_codes() -> tuple[str, ...]:
         if sector_info is not None:
             return tuple(sector_info.keys())
         return tuple(f"S{index:02d}" for index in range(sector_count))
 
     async def fake_pool(db, day):
-        codes = pool_codes()
+        codes = pool_codes_override or board_codes()
         return SectorPool(
             trade_date=day,
             industry_codes=codes,
@@ -135,7 +136,7 @@ def _patch_service(
     def fake_boards():
         return [
             {"sector_code": code, "sector_name": f"板块{code}", "sector_type": "concept"}
-            for code in pool_codes()
+            for code in board_codes()
         ]
 
     async def fake_open(db):
@@ -254,6 +255,7 @@ def test_incomplete_sector_list_does_not_close_missing_sectors(monkeypatch) -> N
     session, quality_calls = _patch_service(
         monkeypatch, chain, sector_count=len(sector_info),
         open_members=open_members, sector_info=sector_info,
+        pool_codes_override=tuple(open_members.keys()),
     )
 
     result = asyncio.run(service.collect_sector_members(date(2026, 11, 3)))
@@ -280,6 +282,7 @@ def test_mild_incomplete_sector_list_is_warning_not_failure(monkeypatch) -> None
     session, quality_calls = _patch_service(
         monkeypatch, chain, sector_count=len(sector_info),
         open_members=open_members, sector_info=sector_info,
+        pool_codes_override=tuple(open_members.keys()),
     )
 
     result = asyncio.run(service.collect_sector_members(date(2026, 11, 16)))
@@ -304,6 +307,7 @@ def test_complete_sector_list_closes_truly_missing_sector(monkeypatch) -> None:
     session, _quality_calls = _patch_service(
         monkeypatch, chain, sector_count=len(sector_info),
         open_members=open_members, sector_info=sector_info,
+        pool_codes_override=tuple(open_members.keys()),
     )
 
     result = asyncio.run(service.collect_sector_members(date(2026, 11, 3)))

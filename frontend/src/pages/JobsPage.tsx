@@ -385,6 +385,11 @@ export default function JobsPage() {
       {/* ========== 数据集新鲜度总览 ========== */}
       <div className="space-y-2">
         <SectionHeader index="01" title="数据新鲜度总览" hint="每个数据集最后成功时间 / 覆盖率 / 异常数" />
+        <p className="text-[12px] leading-relaxed text-muted-foreground">
+          板块类覆盖率按目标池计算：sector_pool 的“可交易占比”是候选池 → 可交易池的过滤结果，
+          低于 100% 不是数据缺失；sector_members / sector_daily / sector_snapshot
+          只对目标池负责，历史非目标板块不计入缺口。
+        </p>
         {freshnessQuery.isLoading ? (
           <div
             aria-busy="true"
