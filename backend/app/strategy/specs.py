@@ -215,11 +215,9 @@ SPECS: dict[str, StrategySpec] = {
     ),
 }
 
-#: 未启用候选策略：可回测/测试，但不进入 list_specs/每日任务/API；
-#: 通过回测门槛后再显式加入 SPECS。
-CANDIDATE_SPECS: dict[str, StrategySpec] = {
-    code: SPECS.pop(code) for code in ("c1", "c2", "c3", "c6")
-}
+#: 观察候选池：当前为空。C1/C2/C3/C6 已于 2026-11-28 并入正式启用集（SPECS），
+#: 保留该注册表供后续新策略「先回测、通过门槛后再启用」。
+CANDIDATE_SPECS: dict[str, StrategySpec] = {}
 
 #: 排序口径： (字段, 是否升序)
 _SORT_SPEC: dict[str, tuple[str, bool]] = {

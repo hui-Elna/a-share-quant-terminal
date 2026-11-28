@@ -46,7 +46,7 @@ L1 采集 ingest ──► L2 PostgreSQL 单一事实源
 | 数据库 | PostgreSQL 16；`fact_stock_daily` 按年 RANGE 分区 |
 | 任务编排 | `backend/app/pipeline.py` 的 `run_task` / `run_daily_pipeline` |
 | 定时任务 | 15:36 盘后串行链路（数据 → 罗盘 → 推送）/ 每 30 分钟巡检 / 17:10 信号统计 / 17:30 纸面 / 02:00 补齐 / 定时新闻 |
-| 当前正式策略 | **A3、A4**；C1/C2/C3/C6 为观察候选；A1/A2/B1–B5/C4/C5 实现已移除，仅保留历史 run |
+| 当前正式策略 | **A3、A4、C1、C2、C3、C6**（2026-11-28 起六个全部启用）；A1/A2/B1–B5/C4/C5 实现已移除，仅保留历史 run |
 | 后端入口 | `backend/app/main.py` → `app:app` |
 | CLI 入口 | `backend/scripts/pipeline_cli.py` |
 | 端口 | 后端 8000、前端 5173、宿主机 PostgreSQL 5433（容器内 5432） |

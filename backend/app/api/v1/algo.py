@@ -125,9 +125,15 @@ def _ensure_algo(algo_code: str) -> None:
 
 @router.get("/list")
 async def get_algo_list(
-    include_observation: bool = Query(False, description="是否包含观察候选"),
+    include_observation: bool = Query(
+        False, description="保留参数；C1/C2/C3/C6 已并入正式启用集，当前无观察候选"
+    ),
 ) -> list[dict]:
-    """策略清单。参数 schema 由后端单一维护，前端据此渲染表单。"""
+    """策略清单。参数 schema 由后端单一维护，前端据此渲染表单。
+
+    2026-11-28 起 A3/A4/C1/C2/C3/C6 全部为正式启用策略；
+    ``include_observation`` 仅为旧客户端兼容，观察候选池为空时不会额外返回条目。
+    """
     items = [spec.as_algo_item() for spec in list_specs()]
     if include_observation:
         items.extend(
@@ -194,7 +200,9 @@ async def get_algo_ladder(
 
 @router.get("/consensus")
 async def get_algo_consensus(
-    min_count: int = Query(2, ge=2, le=7, description="最少命中策略数（2–7）"),
+    min_count: int = Query(
+        2, ge=2, le=len(SPECS), description=f"最少命中策略数（2–{len(SPECS)}）"
+    ),
     limit: int = Query(100, ge=1, le=500, description="返回条数"),
     offset: int = Query(0, ge=0, description="分页偏移（C1）"),
     trade_date: Optional[date] = Query(None, description="交易日，默认最新行情日"),

@@ -121,7 +121,7 @@ app = FastAPI(
 | `ADMIN_API_KEY` | 空 | 空时管理接口仅本机可访问 |
 | `CORS_ORIGINS` | `*` | |
 | `PUSH_*` / `WECOM_WEBHOOK_URL` | 关闭 | 企业微信推送 |
-| `OBSERVATION_ALGOS` / `PUSH_OBSERVATION` | 空 / `0` | 观察候选策略 |
+| `OBSERVATION_ALGOS` / `PUSH_OBSERVATION` | 空 / `0` | 兼容旧配置；C1/C2/C3/C6 已启用，候选池为空 |
 | `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` / `LLM_ENABLED` | 空 / `deepseek-chat` / 有 key 即开 | AI 日报 |
 
 ---

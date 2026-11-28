@@ -328,11 +328,11 @@ def test_list_runs_excludes_backtest_by_default() -> None:
 # D2 四策略排序
 # =====================================================================
 
-def test_v8_enabled_specs_current() -> None:
-    """V8：启用清单为 a3/a4；c1–c6 在候选注册表，回测达标后才加入。"""
-    assert set(SPECS) == {"a3", "a4"}
-    assert set(CANDIDATE_SPECS) == {"c1", "c2", "c3", "c6"}
-    assert {item.code for item in list_specs()} == {"a3", "a4"}
+def test_all_six_specs_enabled() -> None:
+    """2026-11-28：C1/C2/C3/C6 并入正式启用集，候选池为空。"""
+    assert set(SPECS) == {"a3", "a4", "c1", "c2", "c3", "c6"}
+    assert CANDIDATE_SPECS == {}
+    assert {item.code for item in list_specs()} == set(SPECS)
 
 
 def test_rank_signals_a4_upgrade_filters() -> None:

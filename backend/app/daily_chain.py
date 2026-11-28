@@ -8,7 +8,7 @@
 1. **data**：`run_daily_pipeline` 完成后，逐项校验 `meta_data_quality` 与当日
    `stg_run`；任一必需数据集或启用策略未就绪即视为失败，后续环节不执行。
 2. **compass**：ETF 同步（失败不阻断）→ `generate_card` → 校验卡片核心字段。
-3. **push**：观察候选 → 选股播报 → 罗盘卡片推送（两者都尝试，任一失败记为失败）。
+3. **push**：选股播报 → 罗盘卡片推送（两者都尝试，任一失败记为失败）。
 
 触发方式
 --------
@@ -105,7 +105,7 @@ async def resolve_chain_date(db: AsyncSession) -> date | None:
 
 
 def expected_push_algos() -> list[str]:
-    """当前应产出当日 run 的主策略（观察候选不在数据门禁内）。"""
+    """当前应产出当日 run 的主策略；未配置时退回全部启用策略。"""
     configured = [code for code in config.PUSH_ALGOS if code in SPECS]
     return configured or list(SPECS)
 

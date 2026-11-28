@@ -15,7 +15,7 @@
     python scripts/pipeline_cli.py features          # 计算技术指标
     python scripts/pipeline_cli.py scores            # 个股因子评分
     python scripts/pipeline_cli.py sector_scores     # 板块三面评分
-    python scripts/pipeline_cli.py algos             # 跑 A3/A4 + 观察候选选股
+    python scripts/pipeline_cli.py algos             # 跑全部启用策略（A3/A4/C1/C2/C3/C6）
     python scripts/pipeline_cli.py report            # 生成 AI 日报
     python scripts/pipeline_cli.py daily             # 全链路（等价 admin/ingest/all）
     python scripts/pipeline_cli.py all               # 同 daily

@@ -1,6 +1,6 @@
 # 在用策略因子清单（A3 / A4 / C1–C3 / C6）
 
-> 口径版本：2026-11-22（C4/C5 永久移除后）
+> 口径版本：2026-11-28（C1/C2/C3/C6 并入正式启用集，C4/C5 已永久移除）
 > 事实源：`backend/app/strategy/specs.py`（`SPECS` / `CANDIDATE_SPECS` / `_SORT_SPEC` / `_METRIC_FIELDS`）、
 > `backend/app/strategy/conditions.py`（求值条件）、`backend/app/core/config.py`（`STRATEGY_DEFAULTS`）。
 > 本文档只描述**当前代码中存在**的策略；A1、A2、B1–B5、C4、C5 的实现已删除，仅保留历史 `stg_run` 记录。
@@ -14,13 +14,13 @@
 |---|---|---|---|---|---|
 | `a3` | 央企 × 综合评分TOP | score | 正式启用 | `composite_score` 降序 | 个股综合评分 |
 | `a4` | 高股息质量 × 低估值 | value | 正式启用 | `dv_ttm` 降序 | PE/PB/股息率/评分/MA120 |
-| `c1` | 海龟突破 | breakout | 观察候选（建议 40 日调仓） | `float_cap` 降序 | 前 20 日最高价 + 中期动量/低波 |
-| `c2` | 高窄旗形 | breakout | 观察候选 | `range40_ratio` 降序 | 40 日窗口高低点 |
-| `c3` | RPS 相对强度突破 | breakout | 观察候选 | `rps` 降序 | 120 日收益率横截面 + 双均线闸门 |
-| `c6` | 布林挤压突破 | breakout | 观察候选 | `boll_width_pct60` 升序 | 布林带宽分位/量能 |
+| `c1` | 海龟突破 | breakout | 正式启用（建议 40 日调仓） | `float_cap` 降序 | 前 20 日最高价 + 中期动量/低波 |
+| `c2` | 高窄旗形 | breakout | 正式启用 | `range40_ratio` 降序 | 40 日窗口高低点 |
+| `c3` | RPS 相对强度突破 | breakout | 正式启用 | `rps` 降序 | 120 日收益率横截面 + 双均线闸门 |
+| `c6` | 布林挤压突破 | breakout | 正式启用 | `boll_width_pct60` 升序 | 布林带宽分位/量能 |
 
-- 正式启用策略进入 `/api/v1/algo/list` 默认清单、每日 16:30 任务与共识榜。
-- 观察候选（C1/C2/C3/C6）需 `include_observation=true` 才出现在清单，可执行/回测，不进入共识与正式统计。
+- 正式启用策略进入 `/api/v1/algo/list` 默认清单、每日选股、信号前瞻统计、策略天梯、共识榜、纸面组合与回测。
+- C1/C2/C3/C6 已于 2026-11-28 由观察候选转入正式启用集；`CANDIDATE_SPECS` 当前为空，`include_observation=true` 仅为旧客户端兼容。
 - 所有策略的 `limit` 默认 20（1–1000），同时参与 run 缓存键。
 
 ---
@@ -236,7 +236,7 @@
 
 ## 8. C6 · 布林挤压突破
 
-> 2026-11 优化未改动参数；跨四相位均值为正（+11.2%），保留观察候选。
+> 2026-11 优化未改动参数；跨四相位均值为正（+11.2%），2026-11-28 起并入正式启用集。
 
 ### 8.1 参数
 

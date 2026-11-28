@@ -75,7 +75,7 @@ export interface AlgoMeta {
   params_schema: AlgoParamDef[]
   /** 契约 5.1 为布尔；兼容后端 0/1 时按 truthy 判断 */
   is_active: boolean
-  /** 观察候选：可查看/执行，但不进入共识与正式统计 */
+  /** 观察候选标记；C1/C2/C3/C6 已启用，当前恒为 false，保留字段兼容 */
   is_observation?: boolean
   sort_order: number
 }

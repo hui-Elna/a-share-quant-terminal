@@ -194,7 +194,7 @@ PAPER_ENABLED_ALGOS: tuple[str, ...] = tuple(
     if item.strip()
 )
 
-# 策略默认参数（A1/A2/B1–B5 已下线并移除实现；现役 A3/A4 + C1/C2/C3/C6 观察候选）
+# 策略默认参数（A1/A2/B1–B5 已下线并移除实现；现役 A3/A4/C1/C2/C3/C6 全部正式启用）
 STRATEGY_DEFAULTS = {
     "a3": {"limit": 20, "min_score": 6.0},     # 0–10 分制（不是 0–100！）
     "a4": {
@@ -275,7 +275,7 @@ PUSH_TOP_N = _env_int("PUSH_TOP_N", 10)
 PUSH_MODE = _env("PUSH_MODE", "always")
 PUSH_DRY_RUN = _env_bool("PUSH_DRY_RUN", False)
 PUSH_FRONTEND_URL = _env("PUSH_FRONTEND_URL", "http://127.0.0.1:5173/algo-center")
-# 观察策略：每日运行/推送，但不进入 SPECS/API/共识
+# 观察策略入口：C1/C2/C3/C6 已并入 SPECS，该配置保留兼容，当前候选池为空
 OBSERVATION_ALGOS = tuple(
     item.strip() for item in _env("OBSERVATION_ALGOS", "").split(",") if item.strip()
 )

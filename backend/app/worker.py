@@ -136,7 +136,11 @@ async def run_daily_chain_watchdog_job(db) -> None:
 
 
 async def run_observation_algos(db) -> list[dict]:
-    """运行观察候选策略（不进入 SPECS/API/共识），供每日推送查看。"""
+    """运行观察候选策略（保留入口以兼容旧配置）。
+
+    C1/C2/C3/C6 已于 2026-11-28 并入正式启用集，由每日 `algos` 步骤统一运行，
+    `CANDIDATE_SPECS` 当前为空，因此这里通常直接返回空列表。
+    """
     from app.core.config import OBSERVATION_ALGOS
     from app.strategy import runner as stg_runner
     from app.strategy.strategies import CANDIDATE_SPECS

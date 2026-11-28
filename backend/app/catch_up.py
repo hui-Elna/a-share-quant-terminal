@@ -448,8 +448,8 @@ async def run_catch_up(db: AsyncSession | None = None) -> dict:
         result = await _execute_catch_up(
             days, db, today=_today_cn(), snapshot_ok=_after_close()
         )
-        # 与 16:30 定时任务保持一致：当日补跑完成后运行观察候选（C1/C2/C3/C6），
-        # 否则 PUSH_OBSERVATION=1 时推送会因为没有 run 而显示“无信号”。
+        # 与 16:30 定时任务保持一致：当日补跑完成后运行观察候选（C1/C2/C3/C6）。
+        # 四个策略已于 2026-11-28 并入正式启用集，候选池为空时该调用直接返回。
         if days == [_today_cn()] and _after_close():
             try:
                 from app.worker import run_observation_algos

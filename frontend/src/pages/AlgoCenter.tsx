@@ -1,7 +1,7 @@
 /**
  * 选股中心（契约第 5、6 节）
  * ===========================
- * - 算法卡片（/algo/list，参数 schema 驱动，A3/A4 正式启用 + c1–c6 观察候选）；
+ * - 算法卡片（/algo/list，参数 schema 驱动，A3/A4 + C1/C2/C3/C6 全部正式启用）；
  * - 参数面板修改不自动请求，「执行算法」按钮触发 useMutation；
  * - 结果区：Run 元信息（run_id/耗时/universe/signal/data_version/参数快照/from_cache）、
  *   动态列结果表格、Top10 评分图、CSV 导出、历史 run 切换；

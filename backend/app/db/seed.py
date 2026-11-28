@@ -1,13 +1,16 @@
 """
-种子数据：策略元信息（A3/A4）
+种子数据：策略元信息（A3/A4/C1/C2/C3/C6）
 ================================
-参数的**唯一定义处**：后端 `strategy/strategies.py` 的 SPECS 也引用同一份默认值，
+参数的**唯一定义处**：后端 `strategy/specs.py` 的 SPECS 也引用同一份默认值，
 前端则通过 `/algo/list` 拿 `params_schema` 渲染表单——避免三处各写一套默认值（V4 的坑）。
 
 A1/A2 已按真实回测结果下线：A1 近三年收益 -16.4%、A2 -33.7%（最大回撤 -59%）。
-B1–B5 及 A1/A2 已下线并移除实现（历史 run 仍保留在库中）；C1/C2/C3/C6 为观察候选，不进入 `ALGO_SEED`。
+B1–B5 及 A1/A2 已下线并移除实现（历史 run 仍保留在库中）；C1/C2/C3/C6 已于
+2026-11-28 并入正式启用集，种子条目从 `SPECS` 生成，避免与接口清单漂移。
 """
 from __future__ import annotations
+
+from app.strategy.specs import SPECS
 
 ALGO_SEED: list[dict] = [
     {
@@ -62,5 +65,21 @@ ALGO_SEED: list[dict] = [
         "sort_order": 2,
     },
 ]
+
+#: C1/C2/C3/C6 的种子从 SPECS 生成：名称、描述与参数和接口完全同源。
+_LEGACY_SEED_CODES = {"a3", "a4"}
+ALGO_SEED.extend(
+    {
+        "algo_code": spec.code,
+        "algo_name": spec.name,
+        "algo_type": spec.algo_type,
+        "short_desc": spec.short_desc,
+        "full_desc": spec.full_desc,
+        "params_schema": [dict(item) for item in spec.params_schema],
+        "sort_order": spec.sort_order,
+    }
+    for spec in sorted(SPECS.values(), key=lambda item: item.sort_order)
+    if spec.code not in _LEGACY_SEED_CODES
+)
 
 __all__ = ["ALGO_SEED"]

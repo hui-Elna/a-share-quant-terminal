@@ -39,7 +39,7 @@ export default function AboutPage() {
           <SectionHeader index="01" title="项目简介" />
           <p className="text-[13px] leading-[1.9] text-muted-foreground">
             GFNA (Global Finance News Aggregator) 已升级为 V5：在保留全球财经新闻聚合与 AI 中文摘要的基础上，
-            补齐了 A 股全市场行情库、技术指标与因子评分、参数化选股策略（A3/A4 价值策略 + C1–C6 观察候选）以及回测能力。
+            补齐了 A 股全市场行情库、技术指标与因子评分、参数化选股策略（A3/A4 价值策略 + C1/C2/C3/C6 突破策略）以及回测能力。
             所有分析只读本地数据库，页面通过「数据新鲜度」标注每个数据集的可信度。
           </p>
         </section>

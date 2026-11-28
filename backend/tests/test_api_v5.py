@@ -300,18 +300,20 @@ def test_algo_list(client):
     resp = client.get("/api/v1/algo/list")
     assert resp.status_code == 200
     algos = resp.json()
-    assert {a["algo_code"] for a in algos} == {"a3", "a4"}
+    assert {a["algo_code"] for a in algos} == {"a3", "a4", "c1", "c2", "c3", "c6"}
+    assert all(a["is_active"] is True and a["is_observation"] is False for a in algos)
     for algo in algos:
         assert algo["params_schema"]
 
 
-def test_algo_list_includes_observation_candidates(client):
+def test_algo_list_include_observation_is_backward_compatible(client):
+    """C1/C2/C3/C6 已启用：旧参数仍可用，但不会重复返回候选。"""
     resp = client.get("/api/v1/algo/list", params={"include_observation": "true"})
     assert resp.status_code == 200
     algos = {item["algo_code"]: item for item in resp.json()}
-    assert {"a3", "a4", "c1", "c2", "c3", "c6"} <= set(algos)
-    assert algos["c1"]["is_observation"] is True
-    assert algos["c1"]["is_active"] is False
+    assert set(algos) == {"a3", "a4", "c1", "c2", "c3", "c6"}
+    assert algos["c1"]["is_active"] is True
+    assert algos["c1"]["is_observation"] is False
     assert algos["a3"]["is_observation"] is False
 
 
@@ -339,6 +341,7 @@ def test_algo_consensus(client):
 
 def test_algo_consensus_min_count_validation(client):
     assert client.get("/api/v1/algo/consensus", params={"min_count": 1}).status_code == 422
+    assert client.get("/api/v1/algo/consensus", params={"min_count": 7}).status_code == 422
     assert client.get("/api/v1/algo/consensus", params={"min_count": 8}).status_code == 422
     assert client.get("/api/v1/algo/consensus", params={"limit": 0}).status_code == 422
 

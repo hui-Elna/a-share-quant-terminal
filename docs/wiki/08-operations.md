@@ -245,7 +245,7 @@ python scripts/pipeline_cli.py backtest a3 --start 2025-10-21 --end 2026-10-21
 
 1. **data**：跑 `run_daily_pipeline` 后逐项校验 `meta_data_quality` 与当日启用策略的 `stg_run`；
 2. **compass**：ETF 同步（失败不阻断）→ 生成决策卡 → 校验卡片状态与执行仓位字段；
-3. **push**：观察候选 → 选股播报 → 罗盘卡片推送。
+3. **push**：选股播报 → 罗盘卡片推送。
 
 服务未在 15:36 运行时，启动补跑完成后自动从失败/缺失环节续跑；巡检每 30 分钟重试。
 每次运行写 `ingest_job(task="daily_chain")`，任务监控页可见阶段状态。任一步失败会发送

@@ -337,9 +337,9 @@ HTTP 语义：参数错 422，资源不存在 404，数据未就绪/质量问题
 
 ### 5.1 GET `/api/v1/algo/list`
 
-> V8 M1（2026-11-15）起当前正式启用策略只有 **a3 / a4**；A1/A2/B1–B5 的实现已在 V9 清理中删除（历史 run 仍可查询）。
-> `include_observation=true` 时额外返回 c1/c2/c3/c6 观察候选（`is_active=false`、`is_observation=true`），
-> 默认不返回。观察候选可查看/执行/回测，但不进入共识、天梯与正式统计。
+> 2026-11-28 起正式启用策略为 **a3 / a4 / c1 / c2 / c3 / c6**（六条均为 `is_active=true`、`is_observation=false`）。
+> A1/A2/B1–B5 的实现已在 V9 清理中删除（历史 run 仍可查询）。
+> `include_observation=true` 仅为旧客户端兼容保留：当前观察候选池为空，不会额外返回条目。
 
 ```json
 [ { "algo_code": "a4", "algo_name": "高股息质量 × 低估值", "algo_type": "value",
@@ -522,7 +522,7 @@ T+1 停牌/一字板（`fillable=false`）排除出胜率与均值。
   与有效样本互斥，`total_signals` 为区间内全部信号。
 - 有效样本 < 30 时 `low_sample=true`，排序仅作参考。
 - 顶层统计字段等于 `horizons[String(horizon)]`，一次请求即可渲染 5/10/20 三列。
-- C1 追加 `total / has_more / page / page_size`：天梯一次返回全部启用策略（当前 7 条），不按 `limit` 截断，
+- C1 追加 `total / has_more / page / page_size`：天梯一次返回全部启用策略（当前 6 条），不按 `limit` 截断，
   因此 `total = page_size = items.length`、`has_more=false`；前端仍可复用统一的列表元信息渲染。
 - `spark` 为最近 20 个出信号日的胜率（`win_rate` 0–1，`samples` 当日有效样本数）。
 
@@ -530,7 +530,7 @@ T+1 停牌/一字板（`fillable=false`）排除出胜率与均值。
 
 多策略共识榜（V6 T6）：同一只票被多个策略同时命中时，按命中策略数排序。
 
-- `min_count` 为**最少命中策略数**，只接受 `2–7`，非法返回 422（统一错误体不适用 FastAPI 参数校验）；
+- `min_count` 为**最少命中策略数**，只接受 `2–6`（与当前启用策略数一致），非法返回 422（统一错误体不适用 FastAPI 参数校验）；
 - `limit` 1–500，默认 100；`offset` 默认 0（C1）；`trade_date` 省略时取 `fact_stock_daily.max(trade_date)`（最新行情日）；
 - 统计口径：当日 `stg_run.status='success'` 且 `is_backtest IS FALSE` 的**全部 run**；同一策略的多次参数 run
   合并统计，`hit_count = count(DISTINCT algo_code)`。同一策略多次 run 命中同一票只算一次，取**名次最优**
