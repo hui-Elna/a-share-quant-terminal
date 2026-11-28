@@ -190,7 +190,10 @@ _WINDOW_STRATEGIES = frozenset({"c1", "c2", "c3"})
 
 #: 各候选策略的派生列（用于空窗口时补齐，避免上层 KeyError）
 _DERIVED_COLUMNS: dict[str, tuple[str, ...]] = {
-    "c1": ("high20_prev", "prev_adj_close", "adj_close", "adj_open", "mom60", "vol20"),
+    "c1": (
+        "high20_prev", "prev_adj_close", "adj_close", "adj_open",
+        "mom60", "roc20", "vol20",
+    ),
     "c2": ("range40_ratio", "high40", "low40", "high10", "low10", "vol_ma20_prev"),
     "c3": ("roc120", "roc20", "vol20", "high120", "adj_close", "rps"),
 }
@@ -236,6 +239,7 @@ def _window_features(
         if adj_close[-61] <= 0 or adj_close[-21] <= 0:
             return None
         mom60 = float(adj_close[-1] / adj_close[-61] - 1.0)
+        roc20 = float(adj_close[-1] / adj_close[-21] - 1.0)
         vol20 = _realized_vol(adj_close[-21:])
         return {
             "high20_prev": float(np.max(window_high)),
@@ -243,6 +247,7 @@ def _window_features(
             "adj_close": float(adj_close[-1]),
             "adj_open": float(adj_open[-1]),
             "mom60": mom60,
+            "roc20": roc20,
             "vol20": vol20,
         }
 

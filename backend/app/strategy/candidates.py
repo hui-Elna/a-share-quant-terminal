@@ -29,7 +29,7 @@ async def build_candidates(
       - ``eligible_count``  通过统一前置过滤后的标的数
       - ``calendar_source`` "db" / "fallback"
       - ``trade_date``      回测/详情页需要的日期
-      - ``market``          A4/C6 的沪深300 市场状态（其他策略不取）
+      - ``market``          A4/C1/C3/C6 的沪深300、市场阶段与温度（其他策略不取）
     """
     spec = get_spec(algo_code)
     normalized = _validate_params(spec.code, params)
@@ -56,7 +56,7 @@ async def build_candidates(
     _assert_data_ready(spec.code, eligible)
 
     market = None
-    if spec.code in {"a4", "c3", "c6"}:
+    if spec.code in {"a4", "c1", "c3", "c6"}:
         market = await load_market_context(db, trade_date)
 
     # 最终出口再统一 coerce 一次：保证调用方拿到的数值列一定是 float64

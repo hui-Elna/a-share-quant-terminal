@@ -4,7 +4,9 @@
 口径（用户定稿，不得自创）：
   - 每 ``rebalance_days``（默认 20）个交易日调仓一次，持仓 ``max_positions``（默认 20）只等权；
   - 基准 ``sh000300``（沪深300）；
-  - **T 日收盘出信号 → T+1 开盘成交**；持有到下一次调仓（不做止损/止盈）；
+  - **T 日收盘出信号 → T+1 开盘成交**；持有到下一次调仓；
+  - C1/C3 额外风控：``stop_loss_pct`` 止损（收盘触发、次日开盘）、``risk_off`` 状态退出、
+    信号日/次日各建一半（分批建仓）；C3 在高温日（>=70）按 50% 仓位建仓；
   - 成本：佣金 0.0001（双边，全佣）、最低 5 元/笔；印花税 0.0005（仅卖出）；
     滑点 0.001（买入价 = open×(1+slip)，卖出价 = open×(1-slip)）；
   - 涨停/跌停/停牌不可成交（用 ``fact_stock_daily.is_limit_up/is_limit_down/is_suspended``）：
@@ -33,7 +35,7 @@ import logging
 import time
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, NamedTuple, Sequence
@@ -45,7 +47,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import BACKTEST
 from app.core.errors import DataUnavailableError, InvalidParamError
-from app.db.models.fact import FactStockDaily, MarketIndex
+from app.db.models.fact import (
+    FactStockDaily, MarketIndex, MarketRegimeDaily, MarketTemperatureDaily,
+)
 from app.db.models.meta import TradeCalendar
 from app.db.models.strategy import BacktestRun
 from app.db.session import AsyncSessionLocal
@@ -505,6 +509,68 @@ async def collect_signal_executions(
     return executions, skipped, involved
 
 
+async def load_market_timeline(
+    db: AsyncSession, start: date, end: date
+) -> dict[date, dict[str, Any]]:
+    """加载回测区间的市场阶段与温度（按日累积，缺失值前向填充）。
+
+    用于 C1/C3 的持仓期风控：状态转 `risk_off` 时次日开盘清仓；
+    C3 高温日按比例缩减单笔仓位。表缺失时返回空字典（风控放行）。
+    """
+    begin = start - timedelta(days=30)
+    try:
+        regime_rows = (await db.execute(
+            select(MarketRegimeDaily.trade_date, MarketRegimeDaily.regime_code)
+            .where(MarketRegimeDaily.trade_date >= begin)
+            .where(MarketRegimeDaily.trade_date <= end)
+            .order_by(MarketRegimeDaily.trade_date)
+        )).all()
+        temp_rows = (await db.execute(
+            select(MarketTemperatureDaily.trade_date, MarketTemperatureDaily.temp_score)
+            .where(MarketTemperatureDaily.trade_date >= begin)
+            .where(MarketTemperatureDaily.trade_date <= end)
+            .order_by(MarketTemperatureDaily.trade_date)
+        )).all()
+    except ProgrammingError:
+        logger.warning("市场阶段/温度表不存在，回测持仓期风控按放行处理")
+        return {}
+
+    regime = {row[0]: row[1] for row in regime_rows}
+    temperature = {
+        row[0]: float(row[1]) for row in temp_rows if row[1] is not None
+    }
+    timeline: dict[date, dict[str, Any]] = {}
+    last_regime: str | None = None
+    last_temp: float | None = None
+    for trade_day in sorted(set(regime) | set(temperature)):
+        if trade_day in regime:
+            last_regime = regime[trade_day]
+        if trade_day in temperature:
+            last_temp = temperature[trade_day]
+        timeline[trade_day] = {
+            "regime_code": last_regime,
+            "temp_score": last_temp,
+        }
+    return timeline
+
+
+def align_market_timeline(
+    timeline: Mapping[date, Mapping[str, Any]],
+    trading_days: Sequence[date],
+) -> dict[date, dict[str, Any]]:
+    """把市场时间线按交易日前向填充成 ``day -> context``。"""
+    dates = sorted(timeline)
+    aligned: dict[date, dict[str, Any]] = {}
+    index = 0
+    last: dict[str, Any] = {}
+    for day in trading_days:
+        while index < len(dates) and dates[index] <= day:
+            last = dict(timeline[dates[index]])
+            index += 1
+        aligned[day] = dict(last)
+    return aligned
+
+
 # =====================================================================
 # 组合模拟（纯函数，便于不依赖 DB 的测试）
 # =====================================================================
@@ -642,6 +708,9 @@ def simulate_portfolio(
     initial_state: Mapping[str, Any] | None = None,
     capture_state_on: date | None = None,
     state_out: dict | None = None,
+    stop_loss_pct: float = 0.0,
+    risk_off_days: set[date] | None = None,
+    buy_scale_by_day: Mapping[date, float] | None = None,
 ) -> tuple[list[dict], list[dict], bool]:
     """按"T+1 开盘成交"模拟组合，返回 ``(equity_curve, trades, adjusted)``。
 
@@ -649,6 +718,10 @@ def simulate_portfolio(
       - 每个交易日先看是否调仓日（executions 的键是**成交日**，即信号日的下一个交易日）；
       - 收盘后按后复权价计算净值；
       - 不引入任何 T+1 之后的数据决定 T 的持仓。
+      - ``stop_loss_pct > 0`` 时，收盘浮亏达到阈值则在**下一交易日开盘**卖出
+        （reason=``stop_loss``），卖出当日不允许重新买回。
+      - ``risk_off_days`` 中的交易日开盘清仓（reason=``regime_exit``），当日不再建仓。
+      - ``buy_scale_by_day`` 用于按日缩放单笔目标仓位（如高温日减半）。
 
     ``initial_state`` 用于纸面组合的检查点续算：从上次水位收盘状态（现金、
     后复权份额、基准基数）继续模拟，曲线只覆盖传入的交易日。
@@ -670,6 +743,9 @@ def simulate_portfolio(
     trades: list[dict] = []
     curve: list[dict] = []
     adjusted_ok = True
+    stop_ratio = max(0.0, min(float(stop_loss_pct or 0.0), 0.9))
+    pending_stops: set[str] = set()
+
 
     benchmark_data = benchmark_closes or {}
     bench_base: float | None = (
@@ -729,9 +805,15 @@ def simulate_portfolio(
             }
         )
 
-    def _rebalance(day: date, target_items: Sequence[Mapping[str, Any]]) -> None:
+    def _rebalance(
+        day: date,
+        target_items: Sequence[Mapping[str, Any]],
+        *,
+        blocked_codes: set[str] | None = None,
+    ) -> None:
         nonlocal cash
 
+        blocked = blocked_codes or set()
         # 目标持仓（去重、截断到 max_positions）
         targets = _target_list(target_items, params.max_positions)
         target_codes = {code for code, _ in targets}
@@ -767,11 +849,18 @@ def simulate_portfolio(
             else:
                 value = last_value.get(code, 0.0)
             equity_open += value
-        target_value = equity_open / max(params.max_positions, 1)
+        target_value = (
+            equity_open
+            * max(0.0, min(float((buy_scale_by_day or {}).get(day, 1.0)), 1.0))
+            / max(params.max_positions, 1)
+        )
 
         # ---- 3) 买入目标中尚未持有的标的（涨停留空：跳过并记录 reason）----
         max_new = max(0, int(params.max_positions) - len(positions))
-        new_targets = [(code, name) for code, name in targets if code not in positions][:max_new]
+        new_targets = [
+            (code, name) for code, name in targets
+            if code not in positions and code not in blocked
+        ][:max_new]
         for index, (code, name) in enumerate(new_targets):
             remaining = len(new_targets) - index
             budget = min(target_value, cash / remaining) if remaining > 0 else 0.0
@@ -818,10 +907,57 @@ def simulate_portfolio(
             last_value[code] = round(shares * price, _MONEY_DIGITS)
             _append_trade(day, code, name, "buy", price, shares, amount, fee, "rebalance")
 
+    risk_days = risk_off_days or set()
     for index, day in enumerate(trading_days):
-        target = executions.get(day)
+        # ---- 0a) 市场状态转入 risk_off：开盘清仓，当日不再建仓 ----
+        regime_exit_today = day in risk_days
+        if regime_exit_today:
+            for code in list(positions.keys()):
+                position = positions[code]
+                bar = _bar(code, day)
+                fillable, _block_reason = _order_fillable(bar, "sell")
+                if fillable is not True:
+                    continue  # 跌停/停牌卖不出，下一交易日继续尝试
+                price = _sell_price(float(bar.open))
+                shares = int(position["shares"])
+                amount = round(price * shares, _MONEY_DIGITS)
+                fee = _sell_fee(amount)
+                cash = round(cash + amount - fee, _MONEY_DIGITS)
+                _append_trade(
+                    day, code, position["name"], "sell", price, shares,
+                    amount, fee, "regime_exit",
+                )
+                del positions[code]
+                last_value.pop(code, None)
+            pending_stops.clear()
+
+        # ---- 0b) 执行上一交易日收盘触发的止损（T+1 开盘，卖出当日禁止买回）----
+        stopped_today: set[str] = set()
+        for code in list(pending_stops):
+            position = positions.get(code)
+            if position is None:
+                pending_stops.discard(code)
+                continue
+            bar = _bar(code, day)
+            fillable, _block_reason = _order_fillable(bar, "sell")
+            if fillable is not True:
+                continue
+            price = _sell_price(float(bar.open))
+            shares = int(position["shares"])
+            amount = round(price * shares, _MONEY_DIGITS)
+            fee = _sell_fee(amount)
+            cash = round(cash + amount - fee, _MONEY_DIGITS)
+            _append_trade(
+                day, code, position["name"], "sell", price, shares, amount, fee, "stop_loss"
+            )
+            del positions[code]
+            last_value.pop(code, None)
+            pending_stops.discard(code)
+            stopped_today.add(code)
+
+        target = None if regime_exit_today else executions.get(day)
         if target is not None:
-            _rebalance(day, target)
+            _rebalance(day, target, blocked_codes=stopped_today)
 
         # ---- 收盘净值：现金 + Σ(units × close × adj_factor) ----
         total = cash
@@ -836,6 +972,19 @@ def simulate_portfolio(
             day_values[code] = value
             total += value
         nav = (total / params.initial_cash) if params.initial_cash else 0.0
+
+        # ---- 止损检查（收盘触发，次日开盘执行）----
+        if stop_ratio > 0:
+            for code, position in positions.items():
+                if code in pending_stops:
+                    continue
+                shares = int(position.get("shares") or 0)
+                cost_basis = float(position.get("cost_basis") or 0.0)
+                value = day_values.get(code)
+                if shares <= 0 or cost_basis <= 0 or value is None:
+                    continue
+                if value <= cost_basis * (1.0 - stop_ratio):
+                    pending_stops.add(code)
 
         # ---- 基准净值 ----
         raw_benchmark = benchmark_data.get(day)
@@ -1095,6 +1244,52 @@ async def _run_backtest_impl(
             can_continue=lambda: bool(db.is_active),
         )
         involved_codes.update(signal_codes)
+
+        # ---- 2b) 持仓期风控：状态退出、高温减仓、分批建仓 ----
+        timeline = await load_market_timeline(db, start_date, end_date)
+        market_by_day = align_market_timeline(timeline, trading_days)
+        regime_exit = spec.code in {"c1", "c3"}
+        risk_off_days = (
+            {
+                day for day, context in market_by_day.items()
+                if context.get("regime_code") == "risk_off"
+            }
+            if regime_exit else set()
+        )
+        next_after = {
+            trading_days[index]: trading_days[index + 1]
+            for index in range(len(trading_days) - 1)
+        }
+        signal_by_execution = {
+            execution: signal for signal, execution in next_trading_day.items()
+        }
+        staggered: dict[date, list[dict]] = {}
+        buy_scale: dict[date, float] = {}
+        for execution_day, targets in executions.items():
+            signal_day = signal_by_execution.get(execution_day, execution_day)
+            context = market_by_day.get(signal_day) or {}
+            scale = 1.0
+            if spec.code == "c3":
+                temp = context.get("temp_score")
+                if temp is not None and float(temp) >= 70.0:
+                    scale = 0.5
+            buy_scale[execution_day] = scale
+            second_day = next_after.get(execution_day)
+            can_stagger = (
+                spec.code in {"c1", "c3"}
+                and len(targets) >= 2
+                and second_day is not None
+                and second_day not in executions
+                and second_day not in staggered
+            )
+            if can_stagger:
+                first_n = (len(targets) + 1) // 2
+                staggered[execution_day] = targets[:first_n]
+                staggered[second_day] = targets
+                buy_scale[second_day] = scale
+            else:
+                staggered[execution_day] = targets
+        executions = staggered
         if skipped_signal_days and not executions:
             dates = ", ".join(item["date"] for item in skipped_signal_days[:5])
             raise DataUnavailableError(
@@ -1130,6 +1325,9 @@ async def _run_backtest_impl(
             initial_state=initial_state,
             capture_state_on=capture_state_on,
             state_out=state_out,
+            stop_loss_pct=float(strategy_params.get("stop_loss_pct") or 0.0),
+            risk_off_days=risk_off_days,
+            buy_scale_by_day=buy_scale,
         )
 
         # ---- 5) 绩效 ----
@@ -1152,6 +1350,9 @@ async def _run_backtest_impl(
             backtest_params.initial_cash,
         )
         metrics["adjusted"] = bool(adjusted_ok)
+        metrics["stop_loss_trades"] = sum(
+            1 for item in trades if str(item.get("reason")) == "stop_loss"
+        )
         if skipped_signal_days:
             # 跳过是"数据缺口"而不是"无信号"：写入结果便于前端/审计区分
             metrics["skipped_signal_days"] = len(skipped_signal_days)

@@ -52,7 +52,7 @@ from app.strategy import strategies as strat
 logger = logging.getLogger(__name__)
 
 #: 信号快照 schema：1=旧版无结构化依据，2=triggered/score_breakdown，3=V8 M1 a4 防御门槛
-SIGNAL_SCHEMA_VERSION = 4
+SIGNAL_SCHEMA_VERSION = 5
 
 #: 缓存查找时回看的历史 run 条数（同一 (algo, date) 下参数组合通常远小于该值）
 _CACHE_LOOKBACK = 50
@@ -406,9 +406,9 @@ async def get_cached_run(
             spec.code, trade_date, run.run_id, fingerprint,
         )
         market_gate = None
-        if spec.code in {"a4", "c3", "c6"}:
+        if spec.code in {"a4", "c1", "c3", "c6"}:
             market_gate = strat.market_gate_payload(
-                await strat.load_market_context(db, trade_date), spec.code
+                await strat.load_market_context(db, trade_date), spec.code, run.params
             )
         return _assemble(
             run, spec, _items_from_signals(signals), from_cache=True, market_gate=market_gate
@@ -507,7 +507,9 @@ async def _run_strategy_impl(
     try:
         candidates = await strat.build_candidates(spec.code, resolved_date, normalized, db)
         universe_count = int(candidates.attrs.get("universe_count", len(candidates)))
-        market_gate = strat.market_gate_payload(candidates.attrs.get("market"), spec.code)
+        market_gate = strat.market_gate_payload(
+            candidates.attrs.get("market"), spec.code, normalized
+        )
         signals = strat.rank_signals(spec.code, candidates, normalized)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         items = _items_from_frame(signals)
@@ -605,9 +607,11 @@ async def get_run(run_id: str) -> dict | None:
             )
         signals = await _load_signal_rows(db, run.run_id)
         market_gate = None
-        if run.algo_code in {"a4", "c3", "c6"}:
+        if run.algo_code in {"a4", "c1", "c3", "c6"}:
             market_gate = strat.market_gate_payload(
-                await strat.load_market_context(db, run.trade_date), run.algo_code
+                await strat.load_market_context(db, run.trade_date),
+                run.algo_code,
+                run.params,
             )
         return _assemble(
             run, spec, _items_from_signals(signals), from_cache=True, market_gate=market_gate

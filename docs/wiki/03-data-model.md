@@ -247,7 +247,7 @@
 | `params` JSONB | 归一化后的参数快照 |
 | `universe_count` / `signal_count` | 候选池/信号数 |
 | `data_version` | 当日四表行数 + 最近写入时间指纹 |
-| `signal_schema` | 4（2026-11 因子优化；3=V8 M1） |
+| `signal_schema` | 5（2026-11-28 C1/C3 风控；4=2026-11 因子优化；3=V8 M1） |
 | `is_backtest` | 回测产生的 run |
 | `status` | running/success/failed/superseded |
 | `elapsed_ms` / `error` | |

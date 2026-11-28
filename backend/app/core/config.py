@@ -204,6 +204,7 @@ STRATEGY_DEFAULTS = {
     "c1": {
         "limit": 20, "lookback": 20, "min_amount": 1.0e8,
         "mom60_min": 0.0, "vol_cap": 0.05,
+        "roc20_max": 0.25, "temp_max": 70.0, "stop_loss_pct": 0.08,
     },
     "c2": {
         "limit": 20, "lookback": 40, "mom_min": 1.6, "tight_max": 1.12,
@@ -213,6 +214,8 @@ STRATEGY_DEFAULTS = {
         "limit": 20, "lookback": 120, "rps_threshold": 90.0,
         "near_high_ratio": 0.85, "min_amount": 1.0e8,
         "vol_cap": 0.05, "roc20_max": 0.08,
+        "confirm_days": 2, "ma20_slope_days": 5,
+        "stop_loss_pct": 0.08,
     },
     "c6": {
         "limit": 20, "squeeze_pct": 20.0, "vol_mult": 1.5,

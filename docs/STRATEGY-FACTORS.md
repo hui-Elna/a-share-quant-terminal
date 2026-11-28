@@ -127,6 +127,9 @@
 | `min_amount` | 1.0e8（1 亿元） | 0–1e12 | 当日成交额下限（元） |
 | `mom60_min` | 0.0 | -1.0–1.0 | 60 日动量下限；默认 0 表示只在中期上涨趋势中做突破 |
 | `vol_cap` | 0.05 | 0.005–0.5 | 20 日收益波动率（日标准差）上限；默认 5% |
+| `roc20_max` | 0.25 | 0–1 | 前 20 日涨幅上限；避免追已加速的突破 |
+| `temp_max` | 70.0 | 0–100 | 市场温度上限；温度 ≥ 该值不开新仓 |
+| `stop_loss_pct` | 0.08 | 0–0.5 | 回测/纸面止损比例；收盘触发、次日开盘卖出，0=关闭 |
 
 ### 5.2 条件因子
 
@@ -138,15 +141,19 @@
 | `prev_adj_close` | 前一日复权收盘 | 日线 × `adj_factor` | `adj_close > prev_adj_close`（真涨） |
 | `amount` | 当日成交额 | `fact_stock_daily` | `>= min_amount` |
 | `mom60` | 60 日动量 | 复权收盘计算 | `adj_close[-1] / adj_close[-61] - 1 >= mom60_min` |
+| `roc20` | 20 日涨幅 | 复权收盘计算 | `<= roc20_max`（默认 25%，剔除加速段追高） |
 | `vol20` | 20 日波动率 | 复权收盘日收益标准差 | `<= vol_cap`；剔除高波动题材股 |
 | `is_limit_up` | 当日涨停 | `fact_stock_daily` | 必须为假（涨停日 T+1 开盘难以成交） |
+| 市场门槛 | 温度 + 阶段 | `market_temperature_daily` / `market_regime_daily` | `temp_score < temp_max` 且 `regime_code != risk_off`；数据缺失按放行 |
 
 ### 5.3 排序与输出
 
 - 排序：`float_cap`（流通市值）降序。
 - **执行建议：40 个交易日调仓**。回测中 20 日调仓全窗口 -17.6%，40 日调仓 +12.1%；
   默认 20 日调仓只用于横向对比，不推荐实盘跟踪。
-- 输出 `metrics`：`high20_prev`、`adj_close`、`adj_open`、`prev_adj_close`、`mom60`、`vol20`、
+- 风险控制：市场温度 ≥ 70 或 `risk_off` 不开新仓；`stop_loss_pct` 默认 8%，收盘触发、次日开盘卖出；
+  信号日成交拆成 T+1/T+2 各一半；持仓期转入 `risk_off` 时次日开盘清仓；纸面组合固定 40 日调仓。
+- 输出 `metrics`：`high20_prev`、`adj_close`、`adj_open`、`prev_adj_close`、`mom60`、`roc20`、`vol20`、
   `amount`、`float_cap`、`close`、`pct_chg`、`industry_l1`。
 
 ### 5.4 数据门槛
@@ -207,6 +214,9 @@
 | `min_amount` | 1.0e8（1 亿元） | 0–1e12 | 20 日均额下限（元） |
 | `vol_cap` | 0.05 | 0.005–0.5 | 20 日收益波动率（日标准差）上限 |
 | `roc20_max` | 0.08 | 0–1 | 20 日涨幅上限（剔除已加速的追高标的） |
+| `confirm_days` | 2 | 1–10 | 连续站上 MA20×0.995 的确认天数 |
+| `ma20_slope_days` | 5 | 1–20 | MA20 斜率回看天数；要求当前 MA20 高于 N 日前 |
+| `stop_loss_pct` | 0.08 | 0–0.5 | 回测/纸面止损比例；收盘触发、次日开盘卖出，0=关闭 |
 
 ### 7.2 条件因子
 
@@ -219,11 +229,13 @@
 | `roc20` | 20 日涨幅 | 复权收盘计算 | `<= roc20_max`（默认 8%，避免追在加速段） |
 | `vol20` | 20 日波动率 | 复权收盘日收益标准差 | `<= vol_cap`（默认 5%） |
 | `amount_ma20` | 20 日均成交额 | `fact_feature_daily` | `>= min_amount` |
-| 市场门槛 | 沪深300 双均线 | `market_indices` | `close >= MA20 × 0.995` 且 `close >= MA60`；指数缺失按放行 |
+| 市场门槛 | 沪深300 双均线 + 确认 | `market_indices` | `close >= MA20 × 0.995` 且 `close >= MA60`；连续 `confirm_days` 日站稳、MA20 较 `ma20_slope_days` 日前抬升；指数缺失按放行 |
 
 ### 7.3 排序与输出
 
 - 排序：`rps` 降序。
+- 风险控制：连续站稳 + MA20 上行过滤假修复；`stop_loss_pct` 默认 8%，收盘触发、次日开盘卖出；
+  信号日成交拆成 T+1/T+2 各一半；持仓期转入 `risk_off` 时次日开盘清仓；信号日温度 ≥70 时只开 50% 单笔仓位。
 - 输出 `metrics`：`rps`、`roc120`、`roc20`、`vol20`、`high120`、`adj_close`、`close`、`pct_chg`、
   `amount_ma20`、`industry_l1`。
 - `metrics.triggered` 带一条 `c3_market`（`scope="market"`）。

@@ -38,8 +38,8 @@ class StgRun(Base):
 
     data_version: Mapped[str | None] = mapped_column(String(32), comment="数据版本(最新交易日+行数指纹)")
     signal_schema: Mapped[int] = mapped_column(
-        SmallInteger, default=4, server_default="4",
-        comment="信号快照 schema：1=旧版，2=triggered/score_breakdown，3=V8 M1 a4 防御门槛，4=2026-11 因子优化",
+        SmallInteger, default=5, server_default="5",
+        comment="信号快照 schema：1=旧版，2=triggered/score_breakdown，3=V8 M1 a4 防御门槛，4=2026-11 因子优化，5=C1/C3 风控",
     )
     is_backtest: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(16), default="success",

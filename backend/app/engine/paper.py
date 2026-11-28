@@ -73,6 +73,9 @@ async def _get_portfolio(db: AsyncSession, algo_code: str) -> PaperPortfolio | N
 
 def _paper_params(spec: Any) -> tuple[dict, BacktestParams]:
     bt = BacktestParams.from_config()
+    # C1 的回测与实盘跟踪均以 40 日调仓为基准（20 日只用于横向对比）
+    if str(getattr(spec, "code", "")) == "c1":
+        bt.rebalance_days = 40
     strategy = dict(spec.defaults)
     strategy["limit"] = max(int(strategy.get("limit") or 0), int(bt.max_positions))
     return {"strategy": strategy, "backtest": bt.as_snapshot()}, bt

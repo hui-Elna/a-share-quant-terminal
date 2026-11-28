@@ -38,7 +38,7 @@ def _run(signal_schema: int | None = None) -> StgRun:
 
 
 def test_signal_schema_version_is_current() -> None:
-    assert SIGNAL_SCHEMA_VERSION == 4
+    assert SIGNAL_SCHEMA_VERSION == 5
 
 
 def test_run_meta_exposes_signal_schema() -> None:
@@ -60,4 +60,4 @@ def test_assemble_exposes_signal_schema() -> None:
 def test_model_column_is_not_null_with_current_default() -> None:
     column = StgRun.__table__.c.signal_schema
     assert column.nullable is False
-    assert str(column.server_default.arg) == "4"
+    assert str(column.server_default.arg) == "5"

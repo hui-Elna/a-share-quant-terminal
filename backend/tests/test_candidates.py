@@ -47,6 +47,7 @@ def test_window_features_c1_breakout_and_insufficient_bars() -> None:
     assert features["adj_close"] == pytest.approx(31.0)
     assert features["prev_adj_close"] == pytest.approx(10.0)
     assert features["mom60"] == pytest.approx(2.1)
+    assert features["roc20"] == pytest.approx(2.1)
     assert features["vol20"] > 0
     assert _window_features(bars.tail(60), "c1", 20) is None
 
@@ -103,6 +104,7 @@ def test_rank_signals_c1_turtle() -> None:
     frame["prev_adj_close"] = [10.0, 10.0, 9.5]
     frame["high20_prev"] = [10.0, 11.0, 8.5]
     frame["mom60"] = [0.10, 0.10, 0.10]
+    frame["roc20"] = [0.10, 0.10, 0.10]
     frame["vol20"] = [0.02, 0.02, 0.02]
     frame["is_limit_up"] = [False, False, False]
     result = rank_signals("c1", frame, {})

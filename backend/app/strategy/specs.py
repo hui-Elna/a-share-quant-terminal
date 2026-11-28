@@ -128,13 +128,16 @@ SPECS: dict[str, StrategySpec] = {
         name="海龟突破",
         algo_type="breakout",
         sort_order=3,
-        short_desc="20 日新高 + 中期动量为正 + 低波动 + 成交额过亿，按流通市值降序",
+        short_desc="20 日新高 + 中期动量为正 + 低波动 + 不追高 + 市场不过热，按流通市值降序",
         full_desc=(
             "前 lookback（默认 20）个交易日最高价被今日收盘突破；今日成交额 >= min_amount；"
             "今日收阳（close > open）且真涨（close > prev_close）；"
             "60 日动量 >= mom60_min（默认 0，剔除下跌趋势中的假突破）；"
             "20 日收益波动率（日标准差）<= vol_cap（默认 0.05，剔除高波动题材股）；"
+            "20 日涨幅 <= roc20_max（默认 0.25，剔除已加速的追高标的）；"
+            "市场温度 < temp_max（默认 70）且市场阶段不是避险下跌才开新仓；"
             "当日涨停不入选（T+1 开盘难以成交）；按流通市值降序取前 limit 只。"
+            "回测/纸面组合按 stop_loss_pct（默认 8%）在次日开盘执行止损。"
         ),
         defaults=dict(STRATEGY_DEFAULTS["c1"]),
         params_schema=[
@@ -143,6 +146,9 @@ SPECS: dict[str, StrategySpec] = {
             _param("min_amount", "当日成交额下限(元)", 1.0e8, 0.0, 1.0e12),
             _param("mom60_min", "60日动量下限", 0.0, -1.0, 1.0),
             _param("vol_cap", "20日波动率上限", 0.05, 0.005, 0.5),
+            _param("roc20_max", "前20日涨幅上限", 0.25, 0.0, 1.0),
+            _param("temp_max", "市场温度上限", 70.0, 0.0, 100.0),
+            _param("stop_loss_pct", "止损比例(回测/纸面)", 0.08, 0.0, 0.5),
         ],
     ),
     "c2": StrategySpec(
@@ -179,8 +185,10 @@ SPECS: dict[str, StrategySpec] = {
             "收盘 >= near_high_ratio（默认 0.85）× lookback 日最高；"
             "20 日涨幅 <= roc20_max（默认 0.08，剔除已加速的追高标的）；"
             "20 日收益波动率（日标准差）<= vol_cap（默认 0.05）；"
-            "20 日均额达标；沪深300 收盘 >= MA20 × 0.995 且 >= MA60 才开仓"
-            "（指数缺失按放行）；按 RPS 降序。"
+            "20 日均额达标；沪深300 收盘 >= MA20 × 0.995 且 >= MA60，"
+            "并且连续 confirm_days（默认 2）日站稳 MA20、MA20 较 ma20_slope_days（默认 5）日前抬升"
+            "才开仓；按 RPS 降序。"
+            "回测/纸面组合按 stop_loss_pct（默认 8%）在次日开盘执行止损。"
         ),
         defaults=dict(STRATEGY_DEFAULTS["c3"]),
         params_schema=[
@@ -191,6 +199,9 @@ SPECS: dict[str, StrategySpec] = {
             _param("min_amount", "20日均额下限(元)", 1.0e8, 0.0, 1.0e12),
             _param("vol_cap", "20日波动率上限", 0.05, 0.005, 0.5),
             _param("roc20_max", "20日涨幅上限", 0.08, 0.0, 1.0),
+            _param("confirm_days", "连续站稳MA20天数", 2, 1, 10, kind="integer"),
+            _param("ma20_slope_days", "MA20斜率回看(日)", 5, 1, 20, kind="integer"),
+            _param("stop_loss_pct", "止损比例(回测/纸面)", 0.08, 0.0, 0.5),
         ],
     ),
     "c6": StrategySpec(
@@ -241,7 +252,7 @@ _METRIC_FIELDS: dict[str, tuple[str, ...]] = {
         "amount_ma20", "ma120", "close", "pct_chg", "industry_l1",
     ),
     "c1": (
-        "high20_prev", "adj_close", "adj_open", "prev_adj_close", "mom60", "vol20",
+        "high20_prev", "adj_close", "adj_open", "prev_adj_close", "mom60", "roc20", "vol20",
         "amount", "float_cap", "close", "pct_chg", "industry_l1",
     ),
     "c2": (

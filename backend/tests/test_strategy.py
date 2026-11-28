@@ -420,6 +420,7 @@ def test_rank_signals_c1_momentum_vol_and_limit_up_filters() -> None:
             "amount": [2.0e8] * 4,
             "float_cap": [1.0e9] * 4,
             "mom60": [0.10, -0.10, 0.10, 0.10],
+            "roc20": [0.10] * 4,
             "vol20": [0.02, 0.02, 0.08, 0.02],
             "is_limit_up": [False, False, False, True],
         }
@@ -428,6 +429,49 @@ def test_rank_signals_c1_momentum_vol_and_limit_up_filters() -> None:
     # 放宽阈值后其余标的重新入选（证明失败确由对应因子导致）
     relaxed = {"mom60_min": -1.0, "vol_cap": 0.5}
     assert list(rank_signals("c1", frame, relaxed)["code"]) == ["000001", "000002", "000003"]
+
+
+def test_rank_signals_c1_market_and_chase_filters() -> None:
+    """C1 新门槛：市场温度/避险状态与 20 日涨幅上限。"""
+    frame = pd.DataFrame(
+        {
+            "code": ["000001"],
+            "name": ["通过"],
+            "high20_prev": [10.0],
+            "adj_close": [11.0],
+            "adj_open": [10.0],
+            "prev_adj_close": [10.5],
+            "amount": [2.0e8],
+            "float_cap": [1.0e9],
+            "mom60": [0.10],
+            "roc20": [0.10],
+            "vol20": [0.02],
+            "is_limit_up": [False],
+        }
+    )
+    base_market = {
+        "available": True,
+        "temp_available": True,
+        "temp_score": 60.0,
+        "regime_available": True,
+        "regime_code": "repair_up",
+    }
+    frame.attrs["market"] = dict(base_market)
+    assert list(rank_signals("c1", frame, {})["code"]) == ["000001"]
+
+    hot = frame.copy()
+    hot.attrs["market"] = {**base_market, "temp_score": 80.0}
+    assert len(rank_signals("c1", hot, {})) == 0
+
+    risk_off = frame.copy()
+    risk_off.attrs["market"] = {**base_market, "regime_code": "risk_off"}
+    assert len(rank_signals("c1", risk_off, {})) == 0
+
+    chased = frame.copy()
+    chased["roc20"] = [0.30]
+    chased.attrs["market"] = dict(base_market)
+    assert len(rank_signals("c1", chased, {})) == 0
+    assert list(rank_signals("c1", chased, {"roc20_max": 0.35})["code"]) == ["000001"]
 
 
 def test_rank_signals_c3_overheat_vol_and_market_gate() -> None:
@@ -454,6 +498,42 @@ def test_rank_signals_c3_overheat_vol_and_market_gate() -> None:
     passed = frame.copy()
     passed.attrs["market"] = {"available": True, "c3_ok": True}
     assert list(rank_signals("c3", passed, {})["code"]) == ["000001"]
+
+
+def test_rank_signals_c3_confirmation_and_slope() -> None:
+    """C3 新门槛：连续站稳与 MA20 上行。"""
+    frame = pd.DataFrame(
+        {
+            "code": ["000001"],
+            "name": ["通过"],
+            "rps": [95.0],
+            "adj_close": [10.0],
+            "high120": [11.0],
+            "roc20": [0.03],
+            "vol20": [0.03],
+            "amount_ma20": [2.0e8],
+            "close": [10.0],
+        }
+    )
+    base_market = {
+        "available": True,
+        "c3_ok": True,
+        "ma20_above_flags": [True, True, True],
+        "ma20_history": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
+    }
+    frame.attrs["market"] = dict(base_market)
+    assert list(rank_signals("c3", frame, {})["code"]) == ["000001"]
+
+    unconfirmed = frame.copy()
+    unconfirmed.attrs["market"] = {**base_market, "ma20_above_flags": [True, False, True]}
+    assert len(rank_signals("c3", unconfirmed, {})) == 0
+
+    falling = frame.copy()
+    falling.attrs["market"] = {
+        **base_market,
+        "ma20_history": [105.0, 104.0, 103.0, 102.0, 101.0, 100.0],
+    }
+    assert len(rank_signals("c3", falling, {})) == 0
 
 
 def test_market_gate_payload_a4_regime() -> None:
@@ -601,7 +681,8 @@ def test_market_gate_payload_for_run_level_hint() -> None:
     assert c3 is not None
     assert c3["passed"] is False
     assert c3["ma60"] == pytest.approx(4200.0)
-    assert c3["rule"] == "沪深300 收盘 ≥ MA20 × 0.995 且 ≥ MA60"
+    assert "连续 2 日站稳" in c3["rule"]
+    assert "市场温度" not in c3["rule"]
 
     missing = market_gate_payload(
         {"available": False, "index_code": "000300", "c3_ok": True, "c6_ok": True},
@@ -849,6 +930,103 @@ def test_simulate_uses_next_open_and_lot_size() -> None:
     expected_cash = 100_000.0 - round(10.01 * 9900, 2) - round(max(10.01 * 9900 * 0.0001, 5.0), 2)
     expected_nav = round((expected_cash + 9900 * 10.5) / 100_000.0, 6)
     assert curve[1]["nav"] == pytest.approx(expected_nav, abs=1e-6)
+
+
+def test_simulate_regime_exit_sells_all_at_next_open() -> None:
+    """市场转入 risk_off：次日开盘清仓，且当日不再建仓。"""
+    day1, day2, day3 = date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)
+    price_book = {
+        "000001": {
+            day1: _bar(9.0, 9.5),
+            day2: _bar(10.0, 10.5),
+            day3: _bar(10.2, 10.0),
+        }
+    }
+    params = BacktestParams(max_positions=1, initial_cash=100_000.0)
+    params.validate()
+
+    _, trades, _ = simulate_portfolio(
+        [day1, day2, day3],
+        {day2: [{"code": "000001", "name": "测试股"}]},
+        price_book,
+        {},
+        params,
+        risk_off_days={day3},
+    )
+
+    sells = [item for item in trades if item["side"] == "sell"]
+    assert len(sells) == 1
+    assert sells[0]["date"] == day3.isoformat()
+    assert sells[0]["reason"] == "regime_exit"
+
+
+def test_simulate_buy_scale_reduces_position_size() -> None:
+    """高温日缩放单笔目标仓位：同样标的买入金额减半。"""
+    day1, day2 = date(2026, 1, 5), date(2026, 1, 6)
+    price_book = {"000001": {day1: _bar(9.0, 9.5), day2: _bar(10.0, 10.5)}}
+    params = BacktestParams(max_positions=2, initial_cash=100_000.0)
+    params.validate()
+
+    _, full_trades, _ = simulate_portfolio(
+        [day1, day2],
+        {day2: [{"code": "000001", "name": "测试股"}]},
+        price_book,
+        {},
+        params,
+    )
+    _, half_trades, _ = simulate_portfolio(
+        [day1, day2],
+        {day2: [{"code": "000001", "name": "测试股"}]},
+        price_book,
+        {},
+        params,
+        buy_scale_by_day={day2: 0.5},
+    )
+    full_buy = next(item for item in full_trades if item["side"] == "buy")
+    half_buy = next(item for item in half_trades if item["side"] == "buy")
+    assert 0 < half_buy["amount"] < full_buy["amount"]
+    assert half_buy["amount"] == pytest.approx(full_buy["amount"] * 0.5, rel=0.03)
+
+
+def test_simulate_stop_loss_sells_next_open() -> None:
+    """收盘浮亏达到止损线 → 次日开盘卖出，reason=stop_loss。"""
+    day1, day2, day3, day4 = (
+        date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7), date(2026, 1, 8)
+    )
+    price_book = {
+        "000001": {
+            day1: _bar(9.0, 9.5),
+            day2: _bar(10.0, 9.0),
+            day3: _bar(8.5, 8.8),
+            day4: _bar(8.8, 9.0),
+        }
+    }
+    params = BacktestParams(max_positions=1, initial_cash=100_000.0)
+    params.validate()
+
+    _, trades, _ = simulate_portfolio(
+        [day1, day2, day3, day4],
+        {day2: [{"code": "000001", "name": "测试股"}]},
+        price_book,
+        {},
+        params,
+        stop_loss_pct=0.08,
+    )
+
+    sells = [item for item in trades if item["side"] == "sell"]
+    assert len(sells) == 1
+    assert sells[0]["date"] == day3.isoformat()
+    assert sells[0]["reason"] == "stop_loss"
+    assert sells[0]["price"] == pytest.approx(round(8.5 * (1.0 - 0.001) + 1e-9, 2))
+    # 未设置止损时同一路径继续持有
+    _, trades_no_stop, _ = simulate_portfolio(
+        [day1, day2, day3, day4],
+        {day2: [{"code": "000001", "name": "测试股"}]},
+        price_book,
+        {},
+        params,
+    )
+    assert not [item for item in trades_no_stop if item["side"] == "sell"]
 
 
 def test_simulate_skips_limit_up_buy() -> None:

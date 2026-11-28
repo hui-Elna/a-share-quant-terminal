@@ -506,6 +506,14 @@ def test_enabled_algos_env_override_and_fallback(monkeypatch) -> None:
     assert paper_module.enabled_algos() == sorted(paper_module.SPECS)
 
 
+def test_paper_params_c1_uses_40_day_rebalance() -> None:
+    """C1 纸面跟踪固定 40 日调仓；其他策略沿用全局默认。"""
+    _, c1_bt = paper_module._paper_params(paper_module.SPECS["c1"])
+    assert c1_bt.rebalance_days == 40
+    _, a3_bt = paper_module._paper_params(paper_module.SPECS["a3"])
+    assert a3_bt.rebalance_days == paper_module.BacktestParams.from_config().rebalance_days
+
+
 # =====================================================================
 # vs_backtest 只与同参数的回测比较
 # =====================================================================

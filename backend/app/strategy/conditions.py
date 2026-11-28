@@ -39,29 +39,75 @@ def _c6_market_detail(df: pd.DataFrame) -> cond_dsl.ConditionDetail:
         detail_text=detail_text,
     )
 
-def _c3_market_detail(df: pd.DataFrame) -> cond_dsl.ConditionDetail:
-    """C3 的市场环境要求（scope=market）：MA20 短期 + MA60 中期双闸门。"""
+def _c1_market_detail(df: pd.DataFrame, params: dict) -> cond_dsl.ConditionDetail:
+    """C1 的市场环境要求（scope=market）：温度上限 + 非避险下跌。"""
     market = df.attrs.get("market") or {}
-    flag = _market_flag(df, "c3_ok")
-    detail_text = (
-        "指数数据缺失，按放行处理"
-        if market.get("available") is False
-        else (
-            f"沪深300 close={market.get('close')} ma20={market.get('ma20')} "
-            f"ma60={market.get('ma60')}"
-        )
+    temp_max = float(params.get("temp_max", 70.0))
+    temp_available = bool(market.get("temp_available", False))
+    regime_available = bool(market.get("regime_available", False))
+    temp_ok = _market_temp_ok(market, temp_max)
+    regime_ok = _regime_not_risk_off(market)
+    temp_text = (
+        "温度数据缺失，按放行处理"
+        if not temp_available
+        else f"温度={market.get('temp_score')}（上限 {temp_max:g}）"
     )
-    passed = pd.Series(bool(flag), index=df.index, dtype=bool)
+    regime_text = (
+        "阶段数据缺失，按放行处理"
+        if not regime_available
+        else f"regime={market.get('regime_code')}"
+    )
+    passed = pd.Series(bool(temp_ok and regime_ok), index=df.index, dtype=bool)
     return cond_dsl.ConditionDetail(
-        key="c3_market",
-        label="沪深300 收盘 ≥ MA20 × 0.995 且 ≥ MA60",
+        key="c1_market",
+        label=f"市场温度 < {temp_max:g} 且市场阶段不是避险下跌",
         scope="market",
         required=True,
         op=None,
         passed=passed,
         actual=passed,
+        threshold=temp_max,
+        detail_text=f"{temp_text}；{regime_text}",
+    )
+
+
+def _c3_market_detail(df: pd.DataFrame, params: dict) -> cond_dsl.ConditionDetail:
+    """C3 的市场环境要求（scope=market）：双均线 + 连续站稳 + MA20 上行。"""
+    market = df.attrs.get("market") or {}
+    confirm_days = max(1, int(params.get("confirm_days", 2)))
+    slope_days = max(1, int(params.get("ma20_slope_days", 5)))
+    base_ok = True if market.get("available") is False else bool(market.get("c3_ok", True))
+    confirm_ok = _ma20_confirm_ok(market, confirm_days)
+    slope_ok = _ma20_slope_ok(market, slope_days)
+    detail_text = (
+        "指数数据缺失，按放行处理"
+        if market.get("available") is False
+        else (
+            f"沪深300 close={market.get('close')} ma20={market.get('ma20')} "
+            f"ma60={market.get('ma60')}；连续站稳={confirm_ok}"
+            f"（{confirm_days} 日）；MA20 上行={slope_ok}（{slope_days} 日）"
+        )
+    )
+    passed = pd.Series(
+        bool(base_ok and confirm_ok and slope_ok),
+        index=df.index,
+        dtype=bool,
+    )
+    return cond_dsl.ConditionDetail(
+        key="c3_market",
+        label=(
+            f"沪深300 ≥ MA20×0.995 且 ≥ MA60；连续 {confirm_days} 日站稳、"
+            f"MA20 较 {slope_days} 日前抬升"
+        ),
+        scope="market",
+        required=True,
+        op=None,
+        passed=passed,
+        actual=passed,
+        threshold=None,
         detail_text=detail_text,
     )
+
 
 
 def _a4_regime_detail(df: pd.DataFrame) -> cond_dsl.ConditionDetail:
@@ -158,6 +204,7 @@ def _evaluate_strategy(
         amount = _numeric_column(frame, "amount")
         mom60 = _numeric_column(frame, "mom60")
         vol20 = _numeric_column(frame, "vol20")
+        roc20 = _numeric_column(frame, "roc20")
         limit_up = (
             _to_bool_series(frame["is_limit_up"])
             if "is_limit_up" in frame.columns
@@ -172,7 +219,25 @@ def _evaluate_strategy(
             & (mom60 >= float(normalized["mom60_min"]))
             & vol20.notna()
             & (vol20 <= float(normalized["vol_cap"]))
+            # 不追已经加速的突破：20 日涨幅超过上限的标的剔除
+            & roc20.notna()
+            & (roc20 <= float(normalized["roc20_max"]))
             & ~limit_up
+        )
+        market = frame.attrs.get("market") or {}
+        if not (
+            _market_temp_ok(market, normalized["temp_max"])
+            and _regime_not_risk_off(market)
+        ):
+            logger.info(
+                "C1 市场温度/阶段门槛未通过 temp=%s regime=%s，本次不产生信号",
+                market.get("temp_score"), market.get("regime_code"),
+            )
+            mask = mask & False
+        return StrategyEvaluation(
+            mask=mask.fillna(False).astype(bool),
+            details=[_c1_market_detail(frame, normalized)],
+            frame=frame,
         )
     elif code == "c2":
         range40 = _numeric_column(frame, "range40_ratio")
@@ -207,12 +272,23 @@ def _evaluate_strategy(
             & (amount_ma20 >= float(normalized["min_amount"]))
         )
         market = frame.attrs.get("market") or {}
-        if market.get("available") is not False and not market.get("c3_ok", True):
-            logger.info("C3 市场环境门槛未通过，本次不产生信号")
+        gate_ok = (
+            market.get("available") is False
+            or bool(market.get("c3_ok", True))
+        )
+        if not (
+            gate_ok
+            and _ma20_confirm_ok(market, normalized["confirm_days"])
+            and _ma20_slope_ok(market, normalized["ma20_slope_days"])
+        ):
+            logger.info(
+                "C3 市场环境门槛未通过 flags=%s，本次不产生信号",
+                market.get("ma20_above_flags"),
+            )
             mask = mask & False
         return StrategyEvaluation(
             mask=mask.fillna(False).astype(bool),
-            details=[_c3_market_detail(frame)],
+            details=[_c3_market_detail(frame, normalized)],
             frame=frame,
         )
     elif code == "c6":
@@ -266,6 +342,8 @@ def filter_by_strategy(algo_code: str, df: pd.DataFrame, params: dict) -> pd.Dat
     return filtered
 
 __all__ = [
+    "_c1_market_detail",
+    "_c3_market_detail",
     "_c6_market_detail",
     "_a4_regime_detail",
     "StrategyEvaluation",
